@@ -43,7 +43,7 @@
 import { EXPIRY_LEAD_MS } from "./src/constants.mjs"
 import { credentialOf, toStored } from "./src/credential.mjs"
 import { beginLogin, refreshOnce } from "./src/login.mjs"
-import { checkin, fetchCatalog, fetchUsage } from "./src/api.mjs"
+import { checkin, fetchCatalog, fetchTokenRates, fetchUsage } from "./src/api.mjs"
 import { chatFetch } from "./src/chat.mjs"
 import { staticModels, liveModels } from "./src/models.mjs"
 import { startSelfRegister } from "./src/self-register.mjs"
@@ -293,7 +293,20 @@ export const OfficeAceAuthPlugin = async ({ client, directory } = {}) => {
         try {
           const rows = await fetchCatalog(cred)
           if (!rows.length) return fallback
-          return liveModels(rows, maasBaseOf(cred))
+          // 倍率表当白名单：桌面端只显示有倍率的模型。
+          // 注册表把 404 的测试版也列出来，选不了比少给更糟。
+          let rates = null
+          try {
+            rates = await fetchTokenRates(cred)
+          } catch {
+            // 拉不到就不过滤
+          }
+
+          const live = liveModels(rows, maasBaseOf(cred), rates)
+          // 过滤后一个不剩说明两边对不上，退回全量
+          return Object.keys(live).length > 0
+            ? live
+            : liveModels(rows, maasBaseOf(cred), null)
         } catch (e) {
           log(`目录拉取失败，回退静态表：${e?.message ?? e}`, "warn")
           // 登录被拒 → 标记账号
