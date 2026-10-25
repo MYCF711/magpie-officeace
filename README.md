@@ -118,6 +118,50 @@ m quota
 **为什么不用 https URL：** magpie 只存不拉（契约原文
 "nothing is fetched here"），git 源下的外部图片不会渲染，卡片会显示默认拼图。
 
+## 鸣谢
+
+这个插件的协议实现不是凭空写出来的，参考了下面三个仓库。三个都是 **MIT**，与本项目许可兼容。
+
+### 1. [theseaiying/magpie-officeace-plugin](https://github.com/theseaiying/magpie-officeace-plugin) · MIT
+
+同为 OfficeAce 的 magpie 插件。**参考了 V11 签名**：
+
+| 位置 | 参考了什么 |
+|---|---|
+| `src/crypto.mjs` `signV11Request` | 派生密钥公式：`HMAC(HMAC(access, secret), scope + 0x01)[:32].hex` |
+| `src/constants.mjs` `SERVICE` | `apic` —— V11 credential scope 里的服务名 |
+
+这个公式不能直接拿 `secret` 用，也不在华为云公开文档的显眼位置；没有参考实现，靠试错很难凑对。
+
+其余部分独立实现：登录流程（PKCE + DPoP）、额度分桶、签到、倍率缓存、模型过滤。
+
+### 2. [Gyl1219/magpie-providers-hub](https://github.com/Gyl1219/magpie-providers-hub) · MIT
+
+把多个供应商聚合成一个插件。**参考了域名分工**：
+
+| 位置 | 参考了什么 |
+|---|---|
+| `src/constants.mjs` | `CLAW_BASE`（登录/权限）和 `SUBSCRIPTION_BASE`（额度/签到）**不是同一个主机** |
+
+这一条很关键：用错主机会返回 `404 APIGW.0101` 而不是 `401`，很容易被误判成签名错误。
+它的注释直接指出了这一点。
+
+### 3. [yetone/magpie](https://github.com/yetone/magpie) · MIT
+
+magpie 本体。**参考了插件契约**：
+
+| 位置 | 参考了什么 |
+|---|---|
+| `index.mjs` 九个钩子 | 契约源码（二进制里嵌的那份，以及 `internal/plugin/` 的 Go 实现）|
+| `src/self-register.mjs` | `internal/plugin/market.go` 的 `market()` —— 理解缓存为何会被整体替换 |
+| 全部 | `auth.checkin` 等文档未列的钩子 |
+
+### 没有用到的
+
+- 竞品的测试文件（`*.test.mjs`）—— 本插件没有测试
+- 竞品的 `index.mjs` 实现（41 KB 单文件）—— 本插件按职责拆成 7 个模块
+- `magpie-providers-hub` 的 `src/*.mjs` 渠道实现
+
 ## 许可
 
 MIT
