@@ -56,6 +56,18 @@ openpangu-2.0-pro   openpangu-2.0-flash
 模型名后带消费倍率（`GLM-5.2 · x0.7`），倍率来自
 `GET /v1/model-token-rates`，与选择器同源 —— 显示的倍率就是实际计费。
 
+⚠ **注册表里登记了但调不通的 id 永不列出。** 目录 26 条里有 3 个占位 id
+实测 `POST /v2/chat/completions` 回 404 `ModelArts.81009 Invalid model`：
+
+```
+deepseek-v4.1-flash-1017    deepseek-v4.1-flash-bnt    deepseek-v4-pro
+```
+
+（`-1017` 带 `maas_type: benefit` 头重试仍然 404；换官方直连
+`api.modelarts-maas.com` 回 400 `ModelArts.81002`，那台要 AK/SK 签名。）
+它们既不进正常目录，也不在倍率表拉取失败时的降级结果里 —— 后者直接退回
+内置静态表。判据与名单见 `src/models.mjs` 的 `UNAVAILABLE_IDS`。
+
 未登录时显示内置的 10 个兜底模型。
 
 ## 能力

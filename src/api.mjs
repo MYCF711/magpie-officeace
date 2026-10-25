@@ -36,21 +36,40 @@ let ratesCache = { at: 0, map: new Map() }
  * 拉模型消耗倍率：`GET /v1/model-token-rates`。
  *
  * 响应是 snake_case（`model_name` / `cost_coefficient`），兼容 camelCase。
- * 失败 → 空表（倍率显示优雅降级：模型照常可选，只是名字后不带 x 系数）。
+ *
+ * ⚠ **失败时返回上一份成功缓存，而不是空表**（真实缺陷，2026-10-26）：
+ *   空表在下游会被当成「没有任何模型有倍率」⇒ `liveModels` 的 rates 白名单失效
+ *   ⇒ 注册表 26 条（含 1017 / bnt / v4-pro 三个必 404 的占位 id）全部吐给用户。
+ *   实测复现：`liveModels(rows, base, new Map())` → 26 条，其中 4 条调不通。
+ *
+ *   ⇒ 语义约定：返回**非空**表 = 拿到了权威清单；返回**空**表 = 从来没拿到过。
+ *     调用方据此决定是「按白名单过滤」还是「退到静态表」。
+ *   失败也不清空缓存，且重置计时（20 分钟内不重复打失败的上游）。
  */
 export async function fetchTokenRates(cred) {
   if (Date.now() - ratesCache.at < TOKEN_RATES_TTL_MS && ratesCache.map.size > 0) {
     return ratesCache.map
   }
 
-  const r = await signV11Request(`${SUBSCRIPTION_BASE}${TOKEN_RATES_PATH}`, cred, "GET")
-  if (!r.ok) return new Map()
+  /** 失败路径：保留旧缓存，重置计时，不返回空表覆盖真相。 */
+  const keepStale = () => {
+    ratesCache = { at: Date.now(), map: ratesCache.map }
+    return ratesCache.map
+  }
+
+  let r
+  try {
+    r = await signV11Request(`${SUBSCRIPTION_BASE}${TOKEN_RATES_PATH}`, cred, "GET")
+  } catch {
+    return keepStale()
+  }
+  if (!r.ok) return keepStale()
 
   let j
   try {
     j = JSON.parse(r.text)
   } catch {
-    return new Map()
+    return keepStale()
   }
 
   // 实测形状：{"models":[{"model_name":"…","cost_coefficient":0.18}]}
@@ -75,7 +94,10 @@ export async function fetchTokenRates(cred) {
     }
   }
 
-  if (map.size > 0) ratesCache = { at: Date.now(), map }
+  // 解析出来一条都没有 = 上游换了形状（不是「确实没有模型」）⇒ 同样保留旧缓存
+  if (map.size === 0) return keepStale()
+
+  ratesCache = { at: Date.now(), map }
   return map
 }
 
