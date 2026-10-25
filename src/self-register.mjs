@@ -94,11 +94,40 @@ export async function registerSelf(entry, opts = {}) {
   const cacheDir = cacheDirOf(opts.configDir)
   const marketPath = path.join(cacheDir, "plugin-market.json")
 
+  // ⚠ 重试：多个插件同时启动时，各自读-改-写会互相覆盖。
+  //
+  //   插件 A 读（42 条）→ 写（43 条，含 A）
+  //   插件 B 读（42 条，旧的）→ 写（43 条，含 B）   ← A 没了
+  //
+  //   检测方法：写盘后立刻读回来，看自己的条目在不在。
+  //   不在就重读重试。最多 5 次。
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const r = await registerOnce(entry, { ...opts, cacheDir, marketPath, log })
+    if (!r.ok) return r
+    if (!r.changed) return r
+
+    // 写完后验证自己的条目还在
+    try {
+      const verify = JSON.parse(fs.readFileSync(marketPath, "utf8"))
+      if (Array.isArray(verify.plugins) && verify.plugins.some((x) => x?.package === entry.package)) {
+        return r
+      }
+      // 被别的插件覆盖了 → 等一小会儿重试
+      await sleep(50 + attempt * 100)
+    } catch {
+      await sleep(50 + attempt * 100)
+    }
+  }
+
+  return { ok: false, reason: "多次重试后仍被其它插件覆盖" }
+}
+
+/** 单次读-改-写 */
+async function registerOnce(entry, { cacheDir, marketPath, log, timeoutMs = 15_000 }) {
   try {
     let current
 
     if (fs.existsSync(marketPath)) {
-      // ① 缓存存在 → 读出来
       try {
         current = JSON.parse(fs.readFileSync(marketPath, "utf8"))
       } catch {
@@ -107,9 +136,8 @@ export async function registerSelf(entry, opts = {}) {
     }
 
     if (!current || !Array.isArray(current.plugins)) {
-      // ② 缓存不存在或坏了 → 先拉一份官方的
-      log(`市场缓存不可用，先拉官方 registry`)
-      const official = await fetchOfficial(opts.timeoutMs ?? 15_000)
+      log("市场缓存不可用，先拉官方 registry")
+      const official = await fetchOfficial(timeoutMs)
       if (!official) {
         return { ok: false, reason: "拉不到官方 registry，且本地缓存也不可用" }
       }
@@ -117,26 +145,29 @@ export async function registerSelf(entry, opts = {}) {
     }
 
     // 留一份原始快照，用于判断「写进去会不会有变化」
-    const snapshot = JSON.parse(JSON.stringify(current))
+    const snapshot = JSON.stringify(current, null, 2)
 
-    // ③ 去重后加入
-    const had = current.plugins.some((x) => x?.package === entry.package)
-    current.plugins = current.plugins.filter((x) => x?.package !== entry.package)
-    current.plugins.push(entry)
-
-    // ④ ⚠ 内容没变就不写
+    // 原地更新，不搬位置
     //
-    // 这一条是防「自己写文件 → 触发自己的 watch → 再写」的无限循环。
-    // 实测没它的时候一秒钟能写十几遍，日志刷屏。
+    // ⚠ 不能 filter + push —— 那会改变数组顺序，
+    //   于是「内容比对」永远不相等，每次都要写盘，
+    //   写盘又触发自己的 watch ⇒ 无限循环（实测一秒十几次）。
+    const idx = current.plugins.findIndex((x) => x?.package === entry.package)
+    const had = idx >= 0
+    if (had) {
+      current.plugins[idx] = entry
+    } else {
+      current.plugins.push(entry)
+    }
+
+    // 内容没变就不写 —— 这是终止写-触发-watch 循环的闸门
     const next = JSON.stringify(current, null, 2)
-    const prev = JSON.stringify(snapshot, null, 2)
-    if (prev === next) {
+    if (snapshot === next) {
       return { ok: true, total: current.plugins.length, added: false, changed: false }
     }
 
-    // ⑤ 原子写回
     fs.mkdirSync(cacheDir, { recursive: true })
-    const tmp = marketPath + ".tmp-" + process.pid
+    const tmp = marketPath + ".tmp-" + process.pid + "-" + Math.random().toString(36).slice(2, 6)
     fs.writeFileSync(tmp, next, "utf8")
     fs.renameSync(tmp, marketPath)
 
@@ -147,6 +178,10 @@ export async function registerSelf(entry, opts = {}) {
     log(`自注册失败：${msg}`)
     return { ok: false, reason: msg }
   }
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms))
 }
 
 /**
