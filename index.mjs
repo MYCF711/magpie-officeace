@@ -161,7 +161,8 @@ export const OfficeAceAuthPlugin = async ({ client } = {}) => {
       // ═══ ④ 请求接管 ═══════════════════════════════════════════════
       async loader(getAuth, provider) {
         const auth = await getAuth()
-        if (!auth || auth.type !== "oauth") return {}
+        // ⚠ 不检查 auth.type —— 旧版插件留下的记录可能没有 type 字段，
+        //   而 credentialOf 能认出来就够了。
         const cred = credentialOf(auth)
         if (!cred) return {}
 
