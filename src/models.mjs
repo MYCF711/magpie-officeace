@@ -62,6 +62,33 @@ export function staticModels(baseUrl = OFFICIAL_MAAS_BASE) {
 }
 
 /**
+ * 实测**调不通**的注册表占位 id：无论倍率表拿没拿到，一律不进列表。
+ *
+ * 判据是 `POST /v2/chat/completions` 的**状态码**，不是「名字看着像测试版」：
+ *
+ * | id | 注册表 | 计费清单 | chat 实测 |
+ * |---|---|---|---|
+ * | `deepseek-v4.1-flash-1017` | ✅ | ❌ | **404 `ModelArts.81009 Invalid model`** |
+ * | `deepseek-v4.1-flash-bnt`  | ✅ | ❌ | **404 同上** |
+ * | `deepseek-v4-pro`          | ✅ | ❌ | **404 同上** |
+ * | `deepseek-v4.1-flash-0930` | ✅ | ❌ | 200，但回显 `model="deepseek-v4.1-flash"`（别名，可用） |
+ *
+ * ⚠ 1017 带 `maas_type: benefit` 头重试**仍然 404** —— 别照抄 CodeArts 那条
+ *   「0731 缺 benefit 头」的经验，两家不是一个网关。
+ * ⚠ 换官方直连 `api.modelarts-maas.com` 也救不了：那台要 AK/SK 签名，
+ *   Basic 凭据回 400 `ModelArts.81002`。
+ *
+ * 留着这张表的意义：`liveModels` 在**倍率表不可用**时不做白名单过滤
+ * （那是对的，宁可多给也不给零个），但「多给」不能包含**已知必 404** 的 id ——
+ * 用户选了它，失败发生在对话时，而不是在选择时。
+ */
+export const UNAVAILABLE_IDS = new Set([
+  "deepseek-v4.1-flash-1017",
+  "deepseek-v4.1-flash-bnt",
+  "deepseek-v4-pro",
+])
+
+/**
  * 把服务端拉回的目录转成 magpie 的形状。
  *
  * ⚠ 保留静态表里的配置（上下文窗口等），只更新 id/name ——
@@ -84,7 +111,9 @@ export function liveModels(rows, baseUrl, rates) {
     // /v1/model-token-rates 是**可计费清单**，桌面端只显示它有的（7 个）。
     // 直接用注册表会给出 26 个，其中 19 个选不了 —— 比少给更糟。
     //
-    // rates 为空（接口失败）时不过滤，宁可多给也不给零个。
+    // rates 为空（接口失败）时不做白名单过滤（宁可多给也不给零个），
+    // 但**已知必 404 的 id 任何情况下都不给** —— 见 {@link UNAVAILABLE_IDS}。
+    if (UNAVAILABLE_IDS.has(id)) continue
     if (rates && rates.size > 0 && !rates.has(id)) continue
 
     const name = typeof row?.name === "string" && row.name.length > 0 ? row.name : id

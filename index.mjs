@@ -299,14 +299,28 @@ export const OfficeAceAuthPlugin = async ({ client, directory } = {}) => {
           try {
             rates = await fetchTokenRates(cred)
           } catch {
-            // 拉不到就不过滤
+            rates = null
+          }
+
+          // ⚠ **拿不到倍率表时退回静态表，不要退回注册表全量**（真实缺陷，2026-10-26）
+          //
+          // 注册表 `/v2/models` 的 26 条里有 3 个必 404 的占位 id
+          // （`deepseek-v4.1-flash-1017` / `-bnt` / `deepseek-v4-pro`，实测判据见
+          // `src/models.mjs` 的 `UNAVAILABLE_IDS`）。旧逻辑在这里是
+          // `liveModels(rows, base, null)` —— 不过滤、26 条全给，于是用户能选中
+          // 一个**只会在对话时才 404** 的模型。少给（10 个静态兜底）比多给这些更好。
+          if (!rates || rates.size === 0) {
+            log("倍率表不可用（空表）—— 目录降级为静态表，不列出注册表占位 id", "warn")
+            return fallback
           }
 
           const live = liveModels(rows, maasBaseOf(cred), rates)
-          // 过滤后一个不剩说明两边对不上，退回全量
-          return Object.keys(live).length > 0
-            ? live
-            : liveModels(rows, maasBaseOf(cred), null)
+          // 目录与倍率表零交集 = 上游改了清单形状，同样退回静态表（不再吐全量）
+          if (Object.keys(live).length === 0) {
+            log("倍率表与模型目录零交集 —— 退回静态表", "warn")
+            return fallback
+          }
+          return live
         } catch (e) {
           log(`目录拉取失败，回退静态表：${e?.message ?? e}`, "warn")
           // 登录被拒 → 标记账号
