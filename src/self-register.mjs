@@ -116,19 +116,32 @@ export async function registerSelf(entry, opts = {}) {
       current = official
     }
 
+    // 留一份原始快照，用于判断「写进去会不会有变化」
+    const snapshot = JSON.parse(JSON.stringify(current))
+
     // ③ 去重后加入
     const had = current.plugins.some((x) => x?.package === entry.package)
     current.plugins = current.plugins.filter((x) => x?.package !== entry.package)
     current.plugins.push(entry)
 
-    // ④ 原子写回
+    // ④ ⚠ 内容没变就不写
+    //
+    // 这一条是防「自己写文件 → 触发自己的 watch → 再写」的无限循环。
+    // 实测没它的时候一秒钟能写十几遍，日志刷屏。
+    const next = JSON.stringify(current, null, 2)
+    const prev = JSON.stringify(snapshot, null, 2)
+    if (prev === next) {
+      return { ok: true, total: current.plugins.length, added: false, changed: false }
+    }
+
+    // ⑤ 原子写回
     fs.mkdirSync(cacheDir, { recursive: true })
     const tmp = marketPath + ".tmp-" + process.pid
-    fs.writeFileSync(tmp, JSON.stringify(current, null, 2), "utf8")
+    fs.writeFileSync(tmp, next, "utf8")
     fs.renameSync(tmp, marketPath)
 
     log(`已注册 ${entry.package}（${had ? "更新" : "新增"}，共 ${current.plugins.length} 条）`)
-    return { ok: true, total: current.plugins.length, added: !had }
+    return { ok: true, total: current.plugins.length, added: !had, changed: true }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     log(`自注册失败：${msg}`)
@@ -203,12 +216,14 @@ export function startSelfRegister(entry, opts = {}) {
     const attach = () => {
       try {
         watcher = fs.watch(marketPath, () => {
-          // 去抖：magpie 写文件可能触发多次事件
+          // ⚠ 我们自己写的文件也会触发这个回调。
+          //   靠 registerSelf 的内容比对短路来终止循环（内容没变就不写），
+          //   这里只做去抖，让 magpie 的一次覆盖只引发一次检查。
           if (pending) return
           pending = setTimeout(() => {
             pending = null
             ensure()
-          }, 300)
+          }, 500)
           if (typeof pending.unref === "function") pending.unref()
         })
         watcher.on("error", () => {
