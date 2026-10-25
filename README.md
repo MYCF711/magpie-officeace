@@ -110,6 +110,14 @@ m quota
 凭据往返     ✅ toStored → credentialOf 一致
 ```
 
+## 图标
+
+内嵌在 `package.json` 的 `magpie.icon` 和 `index.mjs` 的 `auth.icon` 里
+（OfficeAce 官方 `.ico` 转 128×128 PNG，13.6 KB 的 data URI）。
+
+**为什么不用 https URL：** magpie 只存不拉（契约原文
+"nothing is fetched here"），git 源下的外部图片不会渲染，卡片会显示默认拼图。
+
 ## 许可
 
 MIT
