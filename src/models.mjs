@@ -21,7 +21,7 @@ export const NPM = "@ai-sdk/openai-compatible"
  *
  * 契约要求：id / name / api:{id,url,npm} / limit / capabilities / cost
  */
-export function modelEntry({ id, name, baseUrl = OFFICIAL_MAAS_BASE, context = 128_000, output = 8192 }) {
+export function modelEntry({ id, name, baseUrl = OFFICIAL_MAAS_BASE, context = 1_000_000, output = 128_000 }) {
   return {
     id,
     name,
@@ -93,8 +93,8 @@ export function liveModels(rows, baseUrl, rates) {
       id,
       name,
       baseUrl,
-      context: known?.limit?.context ?? 128_000,
-      output: known?.limit?.output ?? 8192,
+      context: known?.limit?.context ?? 1_000_000,
+      output: known?.limit?.output ?? 128_000,
     })
   }
   return out

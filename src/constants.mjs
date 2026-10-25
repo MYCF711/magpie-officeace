@@ -81,16 +81,16 @@ export const TOKEN_RATES_TTL_MS = 20 * 60 * 1000
 
 /** 未登录时的兜底模型表（实测 /v2/models 有 11 个，这里列常用的 10 个）*/
 export const FALLBACK_MODELS = {
-  "glm-5.3": { name: "GLM-5.3", limit: { context: 128_000, output: 8192 } },
-  "glm-5.2": { name: "GLM-5.2", limit: { context: 128_000, output: 8192 } },
-  "glm-5.1": { name: "GLM-5.1", limit: { context: 128_000, output: 8192 } },
-  "deepseek-v4": { name: "DeepSeek-V4", limit: { context: 128_000, output: 8192 } },
-  "deepseek-v4.1": { name: "DeepSeek-V4.1", limit: { context: 128_000, output: 8192 } },
-  "qwen3-30b": { name: "Qwen3 30B", limit: { context: 128_000, output: 8192 } },
-  "qwen3-32b": { name: "Qwen3 32B", limit: { context: 128_000, output: 8192 } },
-  "kimi-k2.6": { name: "Kimi-K2.6", limit: { context: 128_000, output: 8192 } },
-  "pangu-2.0-pro": { name: "盘古 2.0 Pro", limit: { context: 128_000, output: 8192 } },
-  "pangu-2.0-flash": { name: "盘古 2.0 Flash", limit: { context: 128_000, output: 8192 } },
+  "glm-5.3": { name: "GLM-5.3", limit: { context: 1_000_000, output: 128_000 } },
+  "glm-5.2": { name: "GLM-5.2", limit: { context: 1_000_000, output: 128_000 } },
+  "glm-5.1": { name: "GLM-5.1", limit: { context: 1_000_000, output: 128_000 } },
+  "deepseek-v4": { name: "DeepSeek-V4", limit: { context: 1_000_000, output: 128_000 } },
+  "deepseek-v4.1": { name: "DeepSeek-V4.1", limit: { context: 1_000_000, output: 128_000 } },
+  "qwen3-30b": { name: "Qwen3 30B", limit: { context: 1_000_000, output: 128_000 } },
+  "qwen3-32b": { name: "Qwen3 32B", limit: { context: 1_000_000, output: 128_000 } },
+  "kimi-k2.6": { name: "Kimi-K2.6", limit: { context: 1_000_000, output: 128_000 } },
+  "pangu-2.0-pro": { name: "盘古 2.0 Pro", limit: { context: 1_000_000, output: 128_000 } },
+  "pangu-2.0-flash": { name: "盘古 2.0 Flash", limit: { context: 1_000_000, output: 128_000 } },
 }
 
 /**
