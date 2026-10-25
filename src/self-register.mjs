@@ -157,26 +157,81 @@ async function fetchOfficial(timeoutMs) {
 }
 
 /**
- * 启动自注册：插件加载时打一次，首次请求时再打一次（防被覆盖）。
+ * 启动自注册。
  *
- * 两条路径都幂等，重复打不会产生重复条目。
+ * ═══════════════════════════════════════════════════════════════════
+ * 为什么要四重保险
+ * ═══════════════════════════════════════════════════════════════════
+ *
+ * 实测（2026-10-25）：
+ *
+ *   19:12  plugin update → 插件加载 → 自注册写入（39 条）
+ *   19:13  magpie 拉 registry → 整体覆盖（38 条）   ← 被冲掉
+ *
+ * 只打一次**必然失效** —— magpie 拉 registry 的时机不固定。
+ *
+ * 所以：
+ *   ① 加载时         立刻打一次
+ *   ② 5 秒后         等 magpie 首次拉取完成
+ *   ③ 文件变化时      magpie 一覆盖就补回来（关键）
+ *   ④ 每 10 分钟      兜底，防 watch 失效
+ *
+ * 四条路径都幂等，重复打不会产生重复条目。
  *
  * @param {object} entry
- * @param {{configDir?: string, log?: Function}} [opts]
+ * @param {{configDir?: string, log?: Function, watch?: boolean}} [opts]
  */
 export function startSelfRegister(entry, opts = {}) {
+  const log = opts.log ?? (() => {})
   const ensure = () => {
     registerSelf(entry, opts).catch(() => {})
   }
 
-  // ① 插件加载时
+  // ① 加载时
   ensure()
 
-  // ② 5 秒后再打一次（等 magpie 的拉取完成）
-  const t = setTimeout(() => {
-    ensure()
-  }, 5_000)
-  if (typeof t.unref === "function") t.unref()
+  // ② 5 秒后（等 magpie 首次拉 registry 完成）
+  const t1 = setTimeout(ensure, 5_000)
+  if (typeof t1.unref === "function") t1.unref()
+
+  // ③ 监听缓存文件：被覆盖就立刻补回来
+  if (opts.watch !== false) {
+    const marketPath = path.join(cacheDirOf(opts.configDir), "plugin-market.json")
+    let watcher = null
+    let pending = null
+
+    const attach = () => {
+      try {
+        watcher = fs.watch(marketPath, () => {
+          // 去抖：magpie 写文件可能触发多次事件
+          if (pending) return
+          pending = setTimeout(() => {
+            pending = null
+            ensure()
+          }, 300)
+          if (typeof pending.unref === "function") pending.unref()
+        })
+        watcher.on("error", () => {
+          // 文件被删/替换时 watch 会断，稍后重挂
+          try { watcher?.close() } catch {}
+          watcher = null
+          const t = setTimeout(attach, 5_000)
+          if (typeof t.unref === "function") t.unref()
+        })
+        if (typeof watcher.unref === "function") watcher.unref()
+      } catch {
+        // 挂不上就算了，④ 会兜底
+      }
+    }
+
+    attach()
+
+    // ④ 每 10 分钟兜底
+    const t2 = setInterval(ensure, 10 * 60 * 1000)
+    if (typeof t2.unref === "function") t2.unref()
+  }
+
+  log("自注册已启动（加载时 + 5 秒后 + 文件变化 + 每 10 分钟）")
 }
 
 export const _internal = { cacheDirOf, OFFICIAL_REGISTRY }
