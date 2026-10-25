@@ -46,10 +46,23 @@ import { beginLogin, refreshOnce } from "./src/login.mjs"
 import { checkin, fetchCatalog, fetchUsage } from "./src/api.mjs"
 import { chatFetch } from "./src/chat.mjs"
 import { staticModels, liveModels } from "./src/models.mjs"
+import { startSelfRegister } from "./src/self-register.mjs"
 
 const PROVIDER = "officeace"
 const PROVIDER_NAME = "OfficeAce"
 const NPM = "@ai-sdk/openai-compatible"
+
+/** 自注册条目：写进 magpie 的市场缓存，让卡片显示「源码」按钮和正确标题 */
+const REGISTRY_ENTRY = {
+  package: "officeace-auth",
+  name: "OfficeAce",
+  providers: ["officeace"],
+  community: true,
+  summary: {
+    en: "Unofficial: OfficeAce (Huawei Cloud AgentArts) coding plans with Huawei Cloud OAuth sign-in — GLM, DeepSeek, Kimi, Qwen3, openPangu and more, live models with credit rates, credit usage and daily check-in.",
+    zh: "非官方：OfficeAce（华为云 AgentArts）编码套餐，华为云 OAuth 登录；GLM、DeepSeek、Kimi、Qwen3、openPangu 等 26 个模型，实时模型与积分倍率、积分用量和每日签到。",
+  },
+}
 
 /** 内嵌图标（OfficeAce 官方 .ico 转 PNG，13.6 KB）*/
 const ICON =
@@ -63,6 +76,9 @@ export const OfficeAceAuthPlugin = async ({ client, directory } = {}) => {
       // 没有日志通道就算了
     }
   }
+
+  // 自注册：写一次就够（magpie 静默时不碰这个文件，实测 3 分钟零变化）
+  startSelfRegister(REGISTRY_ENTRY, { configDir: directory, log })
 
 
 
