@@ -59,8 +59,8 @@ const REGISTRY_ENTRY = {
   providers: ["officeace"],
   community: true,
   summary: {
-    en: "Unofficial: OfficeAce (Huawei Cloud AgentArts) coding plans with Huawei Cloud OAuth sign-in — GLM, DeepSeek, Kimi, Qwen3, openPangu and more, live models with credit rates, credit usage and daily check-in.",
-    zh: "非官方：OfficeAce（华为云 AgentArts）编码套餐，华为云 OAuth 登录；GLM、DeepSeek、Kimi、Qwen3、openPangu 等 26 个模型，实时模型与积分倍率、积分用量和每日签到。",
+    en: "Unofficial: OfficeAce (Huawei Cloud AgentArts) coding plans with Huawei Cloud OAuth sign-in — billable GLM, DeepSeek and Kimi models with live credit rates, credit usage, and the daily check-in.",
+    zh: "非官方：OfficeAce（华为云 AgentArts）编码套餐，华为云 OAuth 登录；GLM、DeepSeek、Kimi 等可计费模型实时列出（带消费倍率）、积分用量与每日签到。",
   },
 }
 
