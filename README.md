@@ -129,6 +129,8 @@ magpie plugin list
 
 ---
 
+> 更新记录：[CHANGELOG.md](./CHANGELOG.md)
+
 ## 许可
 
 MIT。
