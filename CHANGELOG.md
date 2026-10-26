@@ -12,6 +12,8 @@
 - **LICENSE 换成标准 MIT 正文** —— 归属说明移到 `NOTICE.md`，GitHub 才认得出许可
 - **删掉「跟随代理」一条** —— 包内没有任何代理代码
 - **新增 `CHANGELOG.md`**，并让推 tag 自动生成 GitHub Release
+- **仓库里的 `name` 改成 `OfficeAce`** —— 卡片标题就是包名（`plugins/package.json` 的依赖键由包内 `name` 决定），改这里才永久生效：`add` / `update` 不会再把它重置回 `officeace-auth`
+- **新增 `publish-npm.mjs`** —— npm 上的包名仍是 `officeace-auth`（registry 不接受含大写的新包名）；发布改用 `npm run publish:npm`，别再裸跑 `npm publish`
 
 ## 0.1.7 及更早
 
