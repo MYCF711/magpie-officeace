@@ -3,6 +3,12 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与发布流程见 [magpie-plugin-template](https://github.com/MYCF711/magpie-plugin-template) 的 [UPDATING.md](https://github.com/MYCF711/magpie-plugin-template/blob/main/UPDATING.md)。
 
+## 0.1.9 — 2026-10-27
+
+- **插件不再写 magpie 自己的缓存** —— 删掉 `src/self-register.mjs` 与 index 里的调用：`~/.cache/magpie/plugin-market.json` 属于 magpie，插件每次加载都去改它，等于把 registry 条目盖掉
+- **卡片标题与文案改由 registry 条目承担** —— 提交到 `magpie-community/plugins` 的 `registry-entry.json` 是唯一受支持的做法
+- 其余行为（登录、模型、额度、签到）**一行未动**，凭据形状不变，不用重新登录
+
 ## 0.1.8 — 2026-10-26
 
 - **模型数纠错** —— README 与市场文案写「26 个」，实际界面只显示 7 个（26 是平台注册表，7 是计费清单过滤后的结果）
