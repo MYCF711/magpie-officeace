@@ -197,16 +197,24 @@ git 源下的外部图片不会渲染，卡片会显示默认拼图。
 
 ---
 
-## 自注册
+## 卡片标题与市场文案
 
-`src/self-register.mjs` 往 magpie 的市场缓存写一条 `community: true` 的条目，
-让卡片显示「源码」按钮和正确标题。
+两条互不依赖的路，各管一半：
 
-- `plugin-market.json` 存在 → 就地原子更新
-- 不存在 → 从官方 registry 拉一份
+| 来源 | 管什么 |
+|---|---|
+| 包内 `package.json` 的 `name` | **卡片标题** —— magpie 的依赖键就是它 |
+| registry 条目（`registry-entry.json` → `registry.json`） | **「源码」按钮 + 中英文案 + `community: true` 标记** |
 
-**为什么不选「托管 registry + 环境变量」**：那要求用户改启动方式，且依赖 magpie
-内置 URL 不变 —— 两条都是我们控制不了的。
+包不在 registry 里 ⇒ 卡片退回包名、没有源码按钮。所以条目的唯一去处是
+`magpie-community/plugins` 的 `registry.json` —— 那是这个信息**受支持**的载体。
+
+**插件不写 magpie 的缓存。** `~/.cache/magpie/plugin-market.json` 属于 magpie：
+条目一旦由插件自己 merge 进去，每次加载都会把它那份写死的内容盖回来，
+registry 这个「唯一真相」就被架空了。0.1.8 曾用 `src/self-register.mjs` 这么干，
+0.1.9 删除（上游 review 里明确要求，见 CHANGELOG）。
+
+⚠ 插件对 magpie 的目录**只有读的份**。想改卡片上看到的东西 → 改 registry 条目。
 
 ---
 
