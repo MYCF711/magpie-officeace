@@ -1,7 +1,15 @@
 # 更新记录
 
 > 每个版本一节，**一条一行**，说用户能感知的变化。
-> 格式与发布流程见 [magpie-plugin-template](https://github.com/MYCF711/magpie-plugin-template) 的 [UPDATING.md](https://github.com/MYCF711/magpie-plugin-template/blob/main/UPDATING.md)。
+> 格式与发布流程见 [magpie-plugin-scaffold](https://github.com/MYCF711/magpie-plugin-scaffold) 的 [UPDATING.md](https://github.com/MYCF711/magpie-plugin-scaffold/blob/main/UPDATING.md)。
+
+## 0.1.10 — 2026-10-28
+
+- **新增 `AGENTS.md`** —— 给 AI 执行者的入口：按「你在哪一步」给阅读顺序，外加本仓库 14 条会静默出错的坑（症状 → 判据 → 出处）。坑全部来自 `docs/internals.md` 的实测：`dpopPrivateJwk` 续期不能重建、三个域不能混、26/9/7 三个模型口径、`model_name` 带尾部换行、额度三桶的 `.trial` 与 `aside` 语义
+- **新增 `CHECKLIST.md`** —— A 表 13 项代码交付前，B 表发版前七步带命令与判据
+- [README](./README.md) —— 顶部加三行指路：改代码 / 发版前先看这两份；发布是七步，`git push` 只是第 4 步
+- [CHANGELOG](./CHANGELOG.md) 与 `publish-npm.mjs` 里的脚手架链接从旧名 `magpie-plugin-template` 更新为 `magpie-plugin-scaffold`（旧名靠 GitHub 的 301 还能打开，但不该依赖它）
+- `package.json` 的 `files` 补上这两份，否则 npm 包里没有它们
 
 ## 0.1.9 — 2026-10-27
 
