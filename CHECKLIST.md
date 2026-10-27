@@ -81,8 +81,8 @@
       判据：返回 + officeace-auth@<版本>，且 package.json 的 name 已还原
 □ 第 6 步 · tag + Release
       命令：git tag v<version> && git push origin v<version>
-      本仓库**没有** .github/workflows ⇒ Release 手工建：
-        POST /repos/MYCF711/magpie-officeace/releases
+      本仓库**有** .github/workflows/release.yml ⇒ 推 tag 后 workflow 自动建，不用手工 POST
+      判据：约 1 分钟后 GET /releases/tags/v<version> 为 200
         { tag_name, target_commitish:"main", name, body:<CHANGELOG 该版本段>, draft:false }
       判据：tag 与 version 一致；Release 不是 draft
 □ 第 7 步 · 四条验证
