@@ -1,44 +1,19 @@
-// 凭据的读写与兼容
 //
-// ═══════════════════════════════════════════════════════════════════
-// 存在 magpie 里的形状
-// ═══════════════════════════════════════════════════════════════════
+// credential.mjs — 凭据形状与解析
 //
-// magpie 的 plugin-auth.json 里，一个 officeace 账号长这样：
+// 目录：
+//   parseMaybeJson  安全解析（对象直用，字符串 JSON.parse）
+//   credentialOf   magpie 账号记录 → 完整凭据（或 null）
+//   toStored       凭据 → magpie 存储形状（⚠ 改形状等于让老用户掉登录态）
+//   expiryMs       凭据的过期毫秒
+//   isNearExpiry   是否临期（提前 EXPIRY_LEAD_MS 续期）
+//   basicAuthFingerprint  Basic 凭据指纹（判断续期后有没有变化）
+//   isBasicCredentialRejection  一次拒绝是否是「这对 Basic 凭据不被接受」
 //
-//   {
-//     "type": "oauth",
-//     "access": "<JSON 字符串，见下>",
-//     "refresh": "<华为云 STS refresh_token，JWT>",
-//     "expires": 1792841892266,
-//     "accountId": "01a1642ad2ae7f93bf6387ad2fc5f09e"
-//   }
-//
-// `access` 里那份 JSON 的结构：
-//
-//   {
-//     "modelAppKey":     "39161fdacb0c...",   // MaaS 的 appKey
-//     "modelAppSecret":  "11644a70ea4d...",   // MaaS 的 appSecret
-//     "maasBaseUrl":     "https://...",       // 推理域（可能空 → 回退官方）
-//     "access":          "HSTAOZ3JN3WWYF3L...",// STS AK
-//     "secret":          "9hefA4eK2KTT...",   // STS SK
-//     "securityToken":   "hQpjbi1ub3J0...",   // STS 临时令牌
-//     "projectId":       "",
-//     "expiresAt":       "2026-10-24T11:38:12.266Z",
-//     "refreshToken":    "<同一个 JWT>",
-//     "codeVerifier":    "...",               // PKCE
-//     "dpopPrivateJwk":  { ... },             // ⚠ 续期要用同一把钥匙
-//     "accountId":       "01a1642ad2ae7f93bf6387ad2fc5f09e"
-//   }
-//
-// ═══════════════════════════════════════════════════════════════════
-// 为什么要保持这个形状
-// ═══════════════════════════════════════════════════════════════════
-//
-// 本机之前那个临时插件（v0.1）就是这么存的。保持同形状
-// ⇒ **用户已有的登录态可以直接复用，不用重新登录**。
-//
-// ═══════════════════════════════════════════════════════════════════
+
+import { EXPIRY_LEAD_MS } from "./constants.mjs"
+
+// ─── 安全解析 ─────────────────────────────────────────────────────
 
 /** 安全解析：对象直接用，字符串尝试 JSON.parse */
 function parseMaybeJson(raw) {
@@ -82,6 +57,34 @@ export function credentialOf(auth) {
     }
   }
 
+  // ③ 只有 STS 三元组（access / securityToken）也算已登录
+  //
+  //   额度查询（GET {SUB}/v1/subscription）与每日签到（POST .../bonus/claim）
+  //   都走 V11-HMAC-SHA256 签名，只用到 STS；modelAppKey 仅用于 MaaS 的
+  //   Basic 认证（模型目录 / 对话），缺了它不影响额度与签到。
+  //
+  //   原实现只认 modelAppKey，于是「登录成功但 model_auth_info 尚未下发
+  //   appKey」的账号（例如尚未在 OfficeAce 客户端接入 MaaS）被误判成未登录：
+  //   卡片显示「未登录」，每日签到固定失败。实测仅带 STS 的凭据打订阅
+  //   接口返回 200，签到/额度均正常。
+  const stsReady = (c) =>
+    c &&
+    typeof c.access === "string" && c.access.length > 0 &&
+    typeof c.securityToken === "string" && c.securityToken.length > 0
+
+  if (parsed && stsReady(parsed)) {
+    return {
+      ...parsed,
+      refreshToken: auth.refresh || parsed.refreshToken || "",
+    }
+  }
+  if (stsReady(auth)) {
+    return {
+      ...auth,
+      refreshToken: auth.refresh || auth.refreshToken || "",
+    }
+  }
+
   return null
 }
 
@@ -111,28 +114,35 @@ export function toStored(cred, prev) {
   }
 }
 
-/** 凭据到期时间（毫秒）。解析不出来时保守给 1 小时后。 */
+/** 凭据的过期毫秒（拿不到就 0） */
 export function expiryMs(cred) {
   const at = Date.parse(cred?.expiresAt ?? "")
-  return Number.isFinite(at) ? at : Date.now() + 60 * 60 * 1000
+  return Number.isFinite(at) ? at : 0
 }
 
 /** 是否临期（提前 EXPIRY_LEAD_MS 就续）*/
-export function nearExpiry(cred, leadMs) {
-  return expiryMs(cred) - Date.now() <= leadMs
+export function isNearExpiry(cred, nowMs = Date.now()) {
+  const at = expiryMs(cred)
+  return at > 0 && at - nowMs <= EXPIRY_LEAD_MS
 }
 
-/**
- * 基本认证的指纹（key + secret + 宿主）。
- *
- * 用途：续期后判断「凭据真的换了吗」。
- * 指纹没变 ⇒ 重发注定得到同一个拒绝，不如直接告诉用户。
- */
+/** Basic 凭据指纹（判断续期后有没有变化；不含 STS）*/
 export function basicAuthFingerprint(cred) {
   return `${cred?.modelAppKey ?? ""}:${cred?.modelAppSecret ?? ""}:${cred?.maasBaseUrl ?? ""}`
 }
 
-/** 判断一次拒绝是不是「这对 Basic 凭据不被接受」*/
+/**
+ * 判断一次拒绝是不是「这对 Basic 凭据不被接受」。
+ *
+ * 判据（与 login.mjs 的报错文案对齐）：
+ *   - 401 / 403 → 是
+ *   - 4xx 且报文点名 app/key/secret → 是
+ *   - 其余 → 不是
+ *
+ *   ⚠ 不含「ModelArts.81002 Failed to get the authorization header」——
+ *     那是「Authorization 头缺失/为空」（凭据里根本没有 modelAppKey），
+ *     属于未接入 MaaS 的正常状态，不该触发 Basic 续期重发。
+ */
 export function isBasicCredentialRejection(status, text) {
   if (status === 401 || status === 403) return true
   if (status < 400 || status >= 500) return false
