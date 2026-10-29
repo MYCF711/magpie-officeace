@@ -168,10 +168,34 @@ export const OfficeAceAuthPlugin = async ({ client } = {}) => {
         // ⚠ 不检查 auth.type —— 旧版插件留下的记录可能没有 type 字段，
         //   而 credentialOf 能认出来就够了。
         const cred = credentialOf(auth)
-        // 只有 STS、没有 modelAppKey 的账号（尚未接入 MaaS）：额度与签到可用，
-        // 但对话/目录走 Basic 认证，空 appKey 发出去只会得到一个上游 401 ——
-        // 不接管，交给 magpie 按「没有可用凭据」处理。
-        if (!cred || !cred.modelAppKey) return {}
+        if (!cred) return {}
+
+        // 有凭据但没有 MaaS 的 Basic 凭据（尚未在 OfficeAce 客户端接入 MaaS）。
+        // 额度与签到走 STS，是好的；对话走 /v2/chat/completions 要 appKey。
+        //
+        // 以前这里直接 `return {}`（不接管），请求会落到 magpie 自己的空 apiKey 上，
+        // 上游回 `400 ModelArts.81002 Failed to get the authorization header` ——
+        // 用户看到的是「模型报错」，看不出是「账号还没接入 MaaS」（issue #2）。
+        // 现在接管，但直接回一个说清楚原因的 400，不把空 Basic 头发给上游。
+        if (!cred.modelAppKey) {
+          return {
+            async fetch() {
+              return new Response(
+                JSON.stringify({
+                  error: {
+                    message:
+                      "OfficeAce 账号已登录，但还没有接入华为云 MaaS（凭据里没有 modelAppKey）。" +
+                      "请在 OfficeAce 客户端完成「接入华为云 MaaS 模型」后重试；" +
+                      "额度与签到不受影响，已经可以正常使用。",
+                    type: "officeace_maas_not_linked",
+                    code: "MaaSNotLinked",
+                  },
+                }),
+                { status: 400, headers: { "content-type": "application/json" } }
+              )
+            },
+          }
+        }
 
         return {
           // 空 baseURL：由 chatFetch 自己拼目标地址
