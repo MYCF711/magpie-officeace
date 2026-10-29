@@ -75,8 +75,8 @@
       判据：package.json 的 version 变了
 □ 第 2 步 · npm pack --dry-run
       判据：清单里有 README.md / CHANGELOG.md / docs / AGENTS.md / CHECKLIST.md
-□ 第 3 步 · 提交
-□ 第 4 步 · git push origin main（推别的分支不算）
+□ 第 3 步 · 提交并推功能分支（不是 main）
+□ 第 4 步 · PR 的 rules 全绿后合并（禁止直接推 main）
 □ 第 5 步 · npm run publish:npm
       判据：返回 + officeace-auth@<版本>，且 package.json 的 name 已还原
 □ 第 6 步 · tag + Release
