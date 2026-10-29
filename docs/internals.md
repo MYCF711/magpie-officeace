@@ -37,7 +37,7 @@ OfficeAce 的 `/v2` 端点要 `Authorization: Basic base64(appKey:appSecret)`，
 | ⑥ | `auth.checkin(getAuth, provider)` | 每日签到 |
 | ⑦ | `provider.models(provider, {auth})` | 每账号目录（失败回退静态表）|
 | ⑧ | `"chat.headers"(input, output)` | 会话保持 |
-| ⑨ | `accountId` / `uid` / `icon` / `maxConcurrency` | 卡片显示名、图标、并发 3 |
+| ⑨ | `accountId` / `uid` / `icon` / `maxConcurrency` | 卡片显示名（手机号，IAM 读一次，打码 `189****8051`）/ 身份（华为云 domain id）/ 图标 / 并发 3。取不到手机号才回落到 domain id |
 
 ---
 

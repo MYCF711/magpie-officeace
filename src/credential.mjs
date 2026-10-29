@@ -137,9 +137,10 @@ export function toStored(cred, prev) {
     access: JSON.stringify(cred),
     // magpie 的 refreshLead 机制读这个字段
     refresh: cred.refreshToken ?? "",
-    // 卡片显示名（三级回退：accountId → metadata.email → email）
-    accountId: cred.accountId ?? "",
-    // 厂商自己的 id（区分同名账号）
+    // 卡片显示名：手机号（IAM 读到的，已打码）优先；取不到才用 accountId。
+    // ⚠ accountId 是华为云的 domain id（`01a1642a…`），当名字显示就是「乱码」
+    accountId: cred.user_phone || cred.accountId || "",
+    // 厂商自己的 id（区分同名账号）—— 身份永远在 uid，不在 accountId
     uid: cred.accountId ?? "",
   }
 }
