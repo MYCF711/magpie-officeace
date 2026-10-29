@@ -3,6 +3,13 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与发布流程见 [magpie-plugin-scaffold](https://github.com/MYCF711/magpie-plugin-scaffold) 的 [UPDATING.md](https://github.com/MYCF711/magpie-plugin-scaffold/blob/main/UPDATING.md)。
 
+## 0.1.13 — 2026-10-29
+
+- **修复：只有 STS、还没接入 MaaS 的账号被误判成「未登录」** —— `credentialOf()` 以前只认带 `modelAppKey` 的凭据。但额度（`/v1/subscription`）与签到（`/v1/subscription/bonus/claim`）走 V11-HMAC-SHA256，只用 STS 三元组；`modelAppKey` 只用于 MaaS 的 Basic 认证（模型目录 / 对话）。于是「登录成功、STS 有效、`client-permission-validate` 还没下发 `model_auth_info`」的账号：卡片显示未登录、额度看不到、每日签到固定失败，重新登录也修不好。现在只要 `access` + `securityToken` 齐全就认作已登录
+- **对话与目录仍然要 `modelAppKey`** —— 没有就不接管请求、模型目录回退静态表；不会拿空 appKey 去打上游（那样只会得到一个 401）
+- 凭据存储形状**一行未改**（`toStored` 不动），老用户不掉登录
+- 新增 `tests/credential.test.mjs`（13 条，`npm test`）：完整凭据 / STS-only / 缺字段 / 存储形状 / `loader` 与 `models` 的守卫
+
 ## 0.1.12 — 2026-10-28
 
 - **修正文档里的错误说法**：AGENTS 与 CHECKLIST 都写着「本仓库没有 .github/workflows ⇒ Release 手工建」，实际本仓库**有** `release.yml` —— 推 tag 后 workflow 自动建 Release。上一版发布时 `release.mjs` 打出「交给 release.yml」才暴露出来

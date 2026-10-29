@@ -160,7 +160,10 @@ export const OfficeAceAuthPlugin = async ({ client } = {}) => {
         // ⚠ 不检查 auth.type —— 旧版插件留下的记录可能没有 type 字段，
         //   而 credentialOf 能认出来就够了。
         const cred = credentialOf(auth)
-        if (!cred) return {}
+        // 只有 STS、没有 modelAppKey 的账号（尚未接入 MaaS）：额度与签到可用，
+        // 但对话/目录走 Basic 认证，空 appKey 发出去只会得到一个上游 401 ——
+        // 不接管，交给 magpie 按「没有可用凭据」处理。
+        if (!cred || !cred.modelAppKey) return {}
 
         return {
           // 空 baseURL：由 chatFetch 自己拼目标地址
@@ -273,7 +276,8 @@ export const OfficeAceAuthPlugin = async ({ client } = {}) => {
       async models(provider, { auth } = {}) {
         const fallback = staticModels()
         const cred = credentialOf(auth)
-        if (!cred) return fallback
+        // 没有 MaaS 的 Basic 凭据就拿静态表 —— 目录 /v2/models 要 appKey
+        if (!cred || !cred.modelAppKey) return fallback
 
         try {
           const rows = await fetchCatalog(cred)

@@ -82,6 +82,39 @@ export function credentialOf(auth) {
     }
   }
 
+  // ③ 只有 STS 三元组（access / secret / securityToken）也算凭据可用
+  //
+  //    额度（GET {SUB}/v1/subscription）与签到（POST .../bonus/claim）走
+  //    V11-HMAC-SHA256，只用 STS；modelAppKey 只用于 MaaS 的 Basic 认证
+  //    （模型目录 /v2/models 与对话 /v2/chat/completions）。
+  //
+  //    ⇒「登录成功、STS 有效、但 client-permission-validate 还没下发
+  //      model_auth_info」的账号（例如尚未在 OfficeAce 客户端接入 MaaS）
+  //      不该被当成未登录。以前会被判 null：卡片显示「未登录」、
+  //      额度看不到、每日签到固定失败，重新登录也修不好。
+  //
+  //    ⚠ 返回的对象里 modelAppKey 可能为空 —— 调用方各自判断：
+  //      usage / checkin  只要有 STS 就能跑；
+  //      loader / models  必须有 modelAppKey，否则不接管 / 回退静态表
+  //                       （空 appKey 发出去只会得到上游 401）。
+  const stsReady = (c) =>
+    c &&
+    typeof c.access === "string" && c.access.length > 0 &&
+    typeof c.securityToken === "string" && c.securityToken.length > 0
+
+  if (parsed && stsReady(parsed)) {
+    return {
+      ...parsed,
+      refreshToken: auth.refresh || parsed.refreshToken || "",
+    }
+  }
+  if (stsReady(auth)) {
+    return {
+      ...auth,
+      refreshToken: auth.refresh || auth.refreshToken || "",
+    }
+  }
+
   return null
 }
 
