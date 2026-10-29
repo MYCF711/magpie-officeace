@@ -91,9 +91,21 @@ test("expiryMs：解析不了时保守给 1 小时后（不改旧语义）", () 
   assert.ok(at >= before + 59 * 60_000 && at <= Date.now() + 61 * 60_000)
 })
 
-test("loader：STS-only 不接管（空 modelAppKey 不发上游）", async () => {
+test("loader：STS-only 回一个说清原因的 400，不发空 Basic 头", async () => {
   const plugin = await OfficeAceAuthPlugin({})
   const loader = await plugin.auth.loader(async () => record(sts), {})
+  assert.equal(loader.baseURL, undefined, "不该给 baseURL —— 请求不出网关")
+  assert.equal(typeof loader.fetch, "function")
+  const res = await loader.fetch("https://api.modelarts-maas.com/v2/chat/completions", { method: "POST" })
+  assert.equal(res.status, 400)
+  const body = await res.json()
+  assert.equal(body.error.code, "MaaSNotLinked")
+  assert.match(body.error.message, /还没有接入华为云 MaaS/)
+})
+
+test("loader：完全未登录时仍不接管（让 magpie 说「未登录」）", async () => {
+  const plugin = await OfficeAceAuthPlugin({})
+  const loader = await plugin.auth.loader(async () => null, {})
   assert.deepEqual(loader, {})
 })
 

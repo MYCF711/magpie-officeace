@@ -10,6 +10,7 @@
 - **`accountId` = 手机号，`uid` = domain id** —— 名字给人看、身份给宿主去重；取不到手机号就回落到 domain id，**绝不编造、也不影响登录**
 - 续期路径同样补取（老的已登录账号在下一次续期时改名），凭据形状只多一个可选字段 `user_phone`
 - 新增 `tests/phone.test.mjs`（5 组 18 条断言，`npm test` 18 通过）：打码边界、JWT claim、IAM 读取与缓存、失败回落、名字/身份分离
+- **修复：只有 STS、没接入 MaaS 的账号，模型测试报「400 · Failed to get the authorization header」**（issue #2）—— 凭据里没有 `modelAppKey` 时，请求会落到 magpie 的空 apiKey 上，上游回 `ModelArts.81002`，用户看不出「账号还没接入 MaaS」。现在 `loader()` 直接回一个写明原因的 400（`MaaSNotLinked`），提示去 OfficeAce 客户端完成「接入华为云 MaaS 模型」；不再把空 Basic 头发给上游。新增 2 条测试（STS-only 回 400、完全未登录仍不接管）
 
 ## 0.1.13 — 2026-10-29
 
