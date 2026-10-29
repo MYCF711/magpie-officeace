@@ -42,6 +42,7 @@
 
 import { EXPIRY_LEAD_MS } from "./src/constants.mjs"
 import { credentialOf, toStored } from "./src/credential.mjs"
+import { accountIdentityOf, phoneField } from "./src/phone.mjs"
 import { beginLogin, refreshOnce } from "./src/login.mjs"
 import { checkin, fetchCatalog, fetchTokenRates, fetchUsage } from "./src/api.mjs"
 import { chatFetch } from "./src/chat.mjs"
@@ -106,16 +107,17 @@ export const OfficeAceAuthPlugin = async ({ client } = {}) => {
               async callback() {
                 try {
                   const cred = await started.result
+                  // 卡片名用手机号，不用 domain id（见 src/phone.mjs 顶部）
+                  const identified = { ...cred, ...(await phoneField(cred)) }
                   return {
                     type: "success",
                     // magpie 的 refreshLead 机制读这个
-                    refresh: cred.refreshToken ?? "",
-                    // 完整凭据（JSON 字符串，与前版同形状）
-                    access: JSON.stringify(cred),
-                    expires: Date.parse(cred.expiresAt ?? "") || Date.now() + 3600_000,
-                    // 卡片显示名
-                    accountId: cred.accountId ?? "",
-                    uid: cred.accountId ?? "",
+                    refresh: identified.refreshToken ?? "",
+                    // 完整凭据（JSON 字符串，与前版同形状 + 一个可选 user_phone）
+                    access: JSON.stringify(identified),
+                    expires: Date.parse(identified.expiresAt ?? "") || Date.now() + 3600_000,
+                    // 卡片显示名（手机号）/ 身份（domain id）
+                    ...accountIdentityOf(identified),
                   }
                 } catch (e) {
                   return { type: "failed", error: String(e?.message ?? e).slice(0, 500) }
@@ -140,11 +142,17 @@ export const OfficeAceAuthPlugin = async ({ client } = {}) => {
         try {
           const next = await refreshOnce(cred)
           if (!next) return undefined
+          // 续期会重建凭据：保住只存在于旧记录里的 user_phone；老账号在这里懒补一次
+          const kept = {
+            ...next,
+            ...(cred.user_phone && !next.user_phone ? { user_phone: cred.user_phone } : {}),
+          }
+          const identified = kept.user_phone ? kept : { ...kept, ...(await phoneField(kept)) }
           return {
-            access: JSON.stringify(next),
-            refresh: next.refreshToken ?? cred.refreshToken,
-            expires: Date.parse(next.expiresAt ?? "") || Date.now() + 3600_000,
-            ...(next.accountId ? { accountId: next.accountId, uid: next.accountId } : {}),
+            access: JSON.stringify(identified),
+            refresh: identified.refreshToken ?? cred.refreshToken,
+            expires: Date.parse(identified.expiresAt ?? "") || Date.now() + 3600_000,
+            ...accountIdentityOf(identified),
           }
         } catch (e) {
           // 一次性 refresh_token 被消费 → 标记账号，不再重试直到重新登录
@@ -213,7 +221,7 @@ export const OfficeAceAuthPlugin = async ({ client } = {}) => {
           const u = await fetchUsage(cred)
           return {
             plan: u.plan || PROVIDER_NAME,
-            ...(cred.accountId ? { user: cred.accountId } : {}),
+            ...(cred.user_phone || cred.accountId ? { user: cred.user_phone || cred.accountId } : {}),
             windows: u.windows,
           }
         } catch (e) {
