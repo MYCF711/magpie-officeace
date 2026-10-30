@@ -13,6 +13,10 @@ import os from "node:os"
 import path from "node:path"
 import { OfficeAceAuthPlugin, _internal } from "../index.mjs"
 
+// 默认的 fetch 替身：权限接口回 401 = 「云端没有 model_info」，
+// 免得 usage/loader 的旧记录补全去真打网络（测试里没有真凭据）。
+const noModelInfo = async () => new Response(JSON.stringify({ error_code: "APIGW.0301" }), { status: 401 })
+
 // 测试里绝不真起浏览器（openConsole 会被插件调用）
 process.env.MAGPIE_OFFICEACE_NO_BROWSER = "1"
 
@@ -58,7 +62,7 @@ async function withSubscriptionFetch(fn) {
 }
 
 test("usage：没有 modelAppKey 的账号标「未接入 MaaS」并带 signIn expired", async () => {
-  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile() })
+  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile(), fetch: noModelInfo })
   const out = await withSubscriptionFetch(() => plugin.auth.usage(async () => record(stsOnly), {}))
   assert.equal(out.plan, "未接入 MaaS")
   assert.equal(out.signIn, "expired")
@@ -66,7 +70,7 @@ test("usage：没有 modelAppKey 的账号标「未接入 MaaS」并带 signIn e
 })
 
 test("usage：有 modelAppKey 的账号两个字段都不给", async () => {
-  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile() })
+  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile(), fetch: noModelInfo })
   const out = await withSubscriptionFetch(() => plugin.auth.usage(async () => record(withMaas), {}))
   assert.equal(out.plan, "OfficeAce")
   assert.equal("signIn" in out, false)
@@ -135,7 +139,7 @@ test("说明文案：控制台那条如实写「要登录就用同一账号」�
 })
 
 test("只有一个登录入口（用户不用选）", async () => {
-  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile() })
+  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile(), fetch: noModelInfo })
   assert.equal(plugin.auth.methods.length, 1)
   assert.equal(plugin.auth.methods[0].type, "oauth")
   assert.equal(plugin.auth.methods[0].label, "华为云账号")
@@ -274,9 +278,62 @@ test("单入口 · 没开通时先起受控浏览器：opened=true，回退时�
   _internal.maasPending.clear()
 })
 
+// ---- 旧记录补全：只有 STS、没有 modelAppKey → 向云端补 model_info -----------
+
+/** 权限接口回一套完整 model_info（真实形状，2026-10-31 实测 181****0632）。 */
+function grantedFetch() {
+  const calls = []
+  const fetcher = async (url) => {
+    if (String(url).includes("/v1/claw/client-permission-validate")) {
+      calls.push(String(url))
+      return new Response(JSON.stringify({
+        subscription: { model_info: {
+          model_api_url_base: "modelgw-0006.officeace.cn-southwest-2.huaweicloud-agentarts.com",
+          model_auth_info: { model_app_key: "app-key", model_app_secret: "app-secret", maas_api_key: "maas-key" },
+        } },
+      }), { status: 200 })
+    }
+    if (String(url).includes("/v1/subscription")) {
+      return new Response(JSON.stringify({ skus: [], bonus_skus: [] }), { status: 200 })
+    }
+    return new Response("{}", { status: 200 })
+  }
+  return { fetcher, calls }
+}
+
+test("旧记录补全：STS-only 的账号云端有 model_info → 不再标「未接入 MaaS」", async () => {
+  _internal.modelInfoCache.clear()
+  const { fetcher, calls } = grantedFetch()
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, authFile: tempAuthFile() })
+  const out = await plugin.auth.usage(async () => record(stsOnly), {})
+  assert.notEqual(out.plan, "未接入 MaaS", "云端已给 model_info，不能再标未接入")
+  assert.equal(out.signIn, undefined)
+  assert.equal(calls.length, 1, "向云端补了一次")
+  assert.equal(typeof out.windows, "object")
+})
+
+test("旧记录补全：补到 modelAppKey 后 loader 接管（不再回 MaaSNotLinked）", async () => {
+  _internal.modelInfoCache.clear()
+  const { fetcher } = grantedFetch()
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, authFile: tempAuthFile() })
+  const loader = await plugin.auth.loader(async () => record(stsOnly), {})
+  assert.equal(loader.baseURL, "", "有 modelAppKey 就正常接管")
+  assert.equal(typeof loader.fetch, "function")
+})
+
+test("旧记录补全：按账号缓存，第二次不再请求", async () => {
+  _internal.modelInfoCache.clear()
+  const { fetcher, calls } = grantedFetch()
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, authFile: tempAuthFile() })
+  await plugin.auth.usage(async () => record(stsOnly), {})
+  await plugin.auth.usage(async () => record(stsOnly), {})
+  assert.equal(calls.length, 1, "6 小时内复用缓存")
+})
+
 test("usage 记住没接 MaaS 的账号，接上了就忘掉；取的是最近那份", async () => {
   _internal.maasPending.clear()
-  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile() })
+  _internal.modelInfoCache.clear()
+  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile(), fetch: noModelInfo })
   const body = JSON.stringify({ skus: [], bonus_skus: [] })
   const original = globalThis.fetch
   globalThis.fetch = async () => new Response(body, { status: 200 })
@@ -293,7 +350,8 @@ test("usage 记住没接 MaaS 的账号，接上了就忘掉；取的是最近�
 })
 
 test("loader：MaaSNotLinked 400 文案保持两条官方路径与文档链接", async () => {
-  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile() })
+  _internal.modelInfoCache.clear()
+  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile(), fetch: noModelInfo })
   const loader = await plugin.auth.loader(async () => record(stsOnly), {})
   const res = await loader.fetch("https://api.modelarts-maas.com/v2/chat/completions", { method: "POST" })
   assert.equal(res.status, 400)

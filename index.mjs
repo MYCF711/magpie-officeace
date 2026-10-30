@@ -150,6 +150,30 @@ function noteMaasPending(cred) {
   maasPending.set(key, cred)
 }
 
+/**
+ * 旧记录补全：只有 STS、没有 modelAppKey 的账号，云端其实已经给了 `model_info`
+ * （`GET /v1/claw/client-permission-validate` 回 `model_auth_info` + `model_api_url_base`）。
+ *
+ * 以前 loader/usage/models 只看存储里的字段，于是「登录完就能用模型」的账号
+ * （比如 181****0632）被误判成「未接入 MaaS」，还要用户去 MaaS 控制台建 key ——
+ * 而 OfficeAce 自己的模型网关（`modelgw-*.officeace...`）根本不需要那个 key。
+ *
+ * 读一次补上，按账号缓存 6 小时（失败不缓存，下次还会试）。
+ */
+const modelInfoCache = new Map() // identity → { at, cred }
+
+async function hydratedCredential(cred, fetcher = (...args) => fetch(...args)) {
+  if (!cred || cred.modelAppKey) return cred
+  const id = accountIdentityOf(cred).id || cred.accountId || cred.refreshToken || "default"
+  const hit = modelInfoCache.get(id)
+  if (hit && Date.now() - hit.at < 6 * 3600_000) return hit.cred
+  const r = await checkMaasAccess(cred, fetcher, { timeoutMs: 3_000 }).catch(() => null)
+  if (!r?.ok || !r.granted) return cred
+  const merged = { ...cred, modelAppKey: r.modelAppKey, modelAppSecret: r.modelAppSecret, maasBaseUrl: r.maasBaseUrl }
+  modelInfoCache.set(id, { at: Date.now(), cred: merged })
+  return merged
+}
+
 /** 凭据是否到了该续期的时候（与 magpie 的 refreshLead 同一个判据）。 */
 function needsRefresh(cred) {
   const at = Date.parse(cred?.expiresAt ?? "")
@@ -402,8 +426,10 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
         const auth = await getAuth()
         // ⚠ 不检查 auth.type —— 旧版插件留下的记录可能没有 type 字段，
         //   而 credentialOf 能认出来就够了。
-        const cred = credentialOf(auth)
-        if (!cred) return {}
+        const base = credentialOf(auth)
+        if (!base) return {}
+        // 旧记录没有 modelAppKey？先向云端补一次 model_info（见 hydratedCredential）
+        const cred = await hydratedCredential(base, maasFetcher)
 
         // 有凭据但没有 MaaS 的 Basic 凭据（尚未在 OfficeAce 客户端接入 MaaS）。
         // 额度与签到走 STS，是好的；对话走 /v2/chat/completions 要 appKey。
@@ -447,7 +473,9 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
           async fetch(input, init) {
             // ⚠ 每次重新读 auth —— 可能已被 refresh 更新
             const fresh = await getAuth()
-            const current = credentialOf(fresh) ?? cred
+            const latest = credentialOf(fresh) ?? cred
+            // 旧记录没有 modelAppKey 时补一次（否则 chatFetch 会报「未接入 MaaS」）
+            const current = await hydratedCredential(latest, maasFetcher)
 
             return chatFetch({
               input,
@@ -479,8 +507,10 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
        */
       async usage(getAuth, provider) {
         const auth = await getAuth()
-        const cred = credentialOf(auth)
-        if (!cred) return { error: "未登录", windows: [] }
+        const stored = credentialOf(auth)
+        if (!stored) return { error: "未登录", windows: [] }
+        // 旧记录先补 model_info —— 有模型网关就不用再标「未接入 MaaS」
+        const cred = await hydratedCredential(stored, maasFetcher)
 
         // 没接入 MaaS：卡片上用 plan 标明（只影响显示），并让 magpie 在这张
         // 卡上给出「Sign in again」按钮（登录说明里带官方接入入口）。有
@@ -559,9 +589,11 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
 
       async models(provider, { auth } = {}) {
         const fallback = staticModels()
-        const cred = credentialOf(auth)
-        // 没有 MaaS 的 Basic 凭据就拿静态表 —— 目录 /v2/models 要 appKey
-        if (!cred || !cred.modelAppKey) return fallback
+        const stored = credentialOf(auth)
+        if (!stored) return fallback
+        // 旧记录没有 modelAppKey？先补 model_info；补不到才退回静态表
+        const cred = await hydratedCredential(stored, maasFetcher)
+        if (!cred.modelAppKey) return fallback
 
         try {
           const rows = await fetchCatalog(cred)
@@ -657,4 +689,6 @@ export const _internal = {
   waitForLoginAndSave,
   loadSavedCookies,
   primeSession,
+  hydratedCredential,
+  modelInfoCache,
 }

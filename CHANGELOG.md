@@ -1,3 +1,7 @@
+## 未发布
+
+- **修复：老记录不再被误判「未接入 MaaS」** —— 旧版插件写的记录可能只有 STS、没有 `modelAppKey`（例如 181****0632），但云端 `GET /v1/claw/client-permission-validate` 其实已经返回了 `model_info.model_auth_info`（`modelgw-*.officeace...` 网关的 Basic 凭据）。现在 `usage()` / `loader()` / `models()` / chat 检测到缺字段会先向云端补一次（按账号缓存 6 小时），补到就直接用 —— **登录完就能用 deepseek-v4.1-flash 等模型，不需要去 MaaS 控制台创建 API Key**。实测：181****0632 的旧记录补全后 `usage → 个人体验版（3 个额度桶）`、`models → 7 个（含 deepseek-v4.1-flash）`
+
 ## 0.1.21 — 2026-10-31
 
 - **新增：受控浏览器登录态（cookie）** —— 「重新登录」在没开通 MaaS 时不再把控制台链接丢给系统浏览器，而是插件自己起一个受控 Chromium（持久 profile，每账号一个）：第一次在这个窗口登录一次，插件用 CDP `Storage.getCookies` 抓 `.huaweicloud.com` 的 cookie 存到 `~/.cache/magpie/officeace-huawei-<account>.json`；以后打开控制台用同一个 profile 并先注入 cookie 再导航，直接进控制台、不再跳华为云登录页。拿不到浏览器（或 `MAGPIE_OFFICEACE_NO_BROWSER=1`）回退系统浏览器。另核实：官方「token 方式创建云服务登录地址」第②步对我们 STS 凭据回 401（security token 不是 IAM 的），OIDC id-token 交换回 IAM.0007（没有配置 IdP），所以只能走 cookie。
