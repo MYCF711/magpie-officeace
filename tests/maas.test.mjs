@@ -189,10 +189,17 @@ test("单入口 · 探测很慢也不会卡住 authorize（铁律：立刻返回
   _internal.maasPending.clear()
   _internal.noteMaasPending(pendingCred())
   const original = globalThis.fetch
-  // 模拟「网络卡住」：只有在 abort 时才 reject（真实 fetch 就是这样）
+  // 模拟「网络卡住」：真实 fetch 会一直占着 event loop，所以这里也拿一个
+  // **ref 住的** timer 撑着（不能用「永不 settle 且没有任何 handle」的 promise
+  // —— 进程会先退出，测试被 node --test 判成 cancelledByParent），
+  // 并在 abort 时清掉它，保证这条用例自己干净退出。
   globalThis.fetch = (url, init) =>
     new Promise((_, reject) => {
-      init?.signal?.addEventListener("abort", () => reject(new Error("aborted")))
+      const hold = setTimeout(() => reject(new Error("fake fetch: no response")), 5000)
+      init?.signal?.addEventListener("abort", () => {
+        clearTimeout(hold)
+        reject(new Error("aborted"))
+      })
     })
   try {
     const plugin = await OfficeAceAuthPlugin({}, { maasProbeMs: 80, maasWatchMs: 60, maasWatchIntervalMs: 10 })

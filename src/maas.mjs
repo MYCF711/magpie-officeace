@@ -40,12 +40,20 @@ export async function checkMaasAccess(cred, fetcher = fetch, opts = {}) {
   }
   if (cred.projectId) headers["x-project-id"] = cred.projectId
 
+  // ⚠ 不用 AbortSignal.timeout()：它的计时器**是 unref 的** —— 事件循环一空，
+  //   进程先于计时器退出，那次「卡住的请求」就永远不 settle（CI 上就是这样把
+  //   测试挂住、被 node --test 判成 cancelledByParent）。自己拿一个普通
+  //   setTimeout（ref 住），并在结束前一定 clearTimeout。
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(new Error(`请求超过 ${timeoutMs}ms 未响应`)), timeoutMs)
   let r
   try {
     const signed = signHuaweiRequest("GET", url, headers, "", cred.access, cred.secret)
-    r = await fetcher(url, { method: "GET", headers: signed, signal: AbortSignal.timeout(timeoutMs) })
+    r = await fetcher(url, { method: "GET", headers: signed, signal: ac.signal })
   } catch (e) {
     return { ok: false, status: 0, detail: String(e?.message ?? e).slice(0, 200) }
+  } finally {
+    clearTimeout(timer)
   }
 
   const text = await r.text().catch(() => "")
