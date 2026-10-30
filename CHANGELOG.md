@@ -1,4 +1,4 @@
-## 未发布
+## 0.1.21 — 2026-10-31
 
 - **新增：受控浏览器登录态（cookie）** —— 「重新登录」在没开通 MaaS 时不再把控制台链接丢给系统浏览器，而是插件自己起一个受控 Chromium（持久 profile，每账号一个）：第一次在这个窗口登录一次，插件用 CDP `Storage.getCookies` 抓 `.huaweicloud.com` 的 cookie 存到 `~/.cache/magpie/officeace-huawei-<account>.json`；以后打开控制台用同一个 profile 并先注入 cookie 再导航，直接进控制台、不再跳华为云登录页。拿不到浏览器（或 `MAGPIE_OFFICEACE_NO_BROWSER=1`）回退系统浏览器。另核实：官方「token 方式创建云服务登录地址」第②步对我们 STS 凭据回 401（security token 不是 IAM 的），OIDC id-token 交换回 IAM.0007（没有配置 IdP），所以只能走 cookie。
 
