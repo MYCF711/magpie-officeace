@@ -60,9 +60,15 @@ const NPM = "@ai-sdk/openai-compatible"
 // 官方入口（见 README「未接入 MaaS」一节）。不要用 `error`：它会把额度条顶掉、
 // 让账号从额度表消失，而且路由会把「未知」当成「没用过」反而优先选它。
 const MAAS_MISSING_PLAN = "未接入 MaaS"
-const MAAS_CONSOLE_URL = "https://console.huaweicloud.com/agentarts/"
+// MaaS 控制台（ModelArts）—— 开通预置服务、创建 API Key 都在这里。
+// ⚠ 不是 AgentArts 的授权管理页：那条路（批量开通）实测只覆盖 AgentArts 自己的
+//   授权，MaaS 的预置服务/API Key 在 ModelArts 控制台。
+const MAAS_CONSOLE_URL = "https://console.huaweicloud.com/modelarts/?region=cn-southwest-2#/model-studio/homepage"
+const MAAS_API_KEY_URL = "https://console.huaweicloud.com/modelarts/?region=cn-southwest-2#/model-studio/authmanage"
 const MAAS_STEPS =
-  "管理中心 → 授权管理 →「模型」页签 →「批量开通模型」；再「鉴权管理」→ 在 MaaS 服务创建 API Key → 确定。"
+  "①「模型推理 → 在线推理 → 预置服务」里给要用的模型点「开通服务」（没开通时调用会 401/404）；" +
+  "②「管理与统计 → API Key 管理」里创建 API Key（明文只显示一次，创建后 3~5 分钟生效）；" +
+  "③ 把 Key 填进 OfficeAce 客户端的「模型 → 接入模型 → 接入华为云 MaaS 模型」，或在 OfficeAce 里重新接入一次。"
 
 /**
  * 落进控制台那条路时给用户看的话。
@@ -72,12 +78,13 @@ const MAAS_STEPS =
  *   SAML/OIDC 联邦认证）。所以只说「要登录就用同一个华为云账号登一下」。
  */
 const MAAS_OPEN_INSTRUCTIONS =
-  "已保存的登录态能调通华为云，但这个账号还没开通 MaaS —— 打开的是 AgentArts 控制台（" +
+  "已保存的登录态能调通华为云，但这个账号还没开通 MaaS —— 打开的是 MaaS 控制台（" +
   MAAS_CONSOLE_URL +
-  "），请在这里完成开通：" +
+  "），请按这三步开通：" +
   MAAS_STEPS +
   "。开通后回到本窗口，插件会自己检测到并完成。" +
-  "控制台如果要你登录，用**同一个华为云账号**登录一下即可（控制台用的是浏览器会话，插件的凭据没法替你登进去）。"
+  "**控制台要求登录的话，用同一个华为云账号登一下** —— 控制台是浏览器 cookie 会话，插件手里的 STS 凭据没法替你登进去。" +
+  "为什么不能全自动：华为云没有公开的「开通预置服务」API（那是控制台的计费授权动作），API Key 虽然有 OpenAPI，但把 Key 绑定给 OfficeAce 也没有公开接口。"
 
 /** 已经开通时（点了登录但账号其实是好的）：不需要用户做任何事。 */
 const MAAS_ALREADY_INSTRUCTIONS =
@@ -87,7 +94,7 @@ const MAAS_ALREADY_INSTRUCTIONS =
 /** 凭据被拒 / 没有凭据 → 走真正的华为云登录时说的话。 */
 const MAAS_OAUTH_INSTRUCTIONS =
   "已保存的登录态不能用了（或还没有登录态），这里走的是**华为云登录**：在打开的页面里完成登录，本窗口会自动继续。" +
-  "登录成功后，如果额度仍然显示「未接入 MaaS」，再点一次「重新登录」——那时插件会直接带你到 AgentArts 控制台去开通。" +
+  "登录成功后，如果额度仍然显示「未接入 MaaS」，再点一次「重新登录」——那时插件会直接带你到 MaaS 控制台去开通。" +
   "这一步不会替你开通 MaaS。"
 
 const DEFAULT_MAAS_WATCH_MS = 3 * 60_000
@@ -586,6 +593,7 @@ export const _internal = {
   staticModels,
   MAAS_MISSING_PLAN,
   MAAS_CONSOLE_URL,
+  MAAS_API_KEY_URL,
   MAAS_STEPS,
   MAAS_OAUTH_INSTRUCTIONS,
   MAAS_OPEN_INSTRUCTIONS,

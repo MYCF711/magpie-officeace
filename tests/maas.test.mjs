@@ -114,12 +114,13 @@ const pendingCred = (extra = {}) => ({
 })
 
 test("说明文案：控制台那条如实写「要登录就用同一账号」，不假装免登", () => {
-  assert.match(_internal.MAAS_CONSOLE_URL, /^https:\/\/console\.huaweicloud\.com\/agentarts\/$/)
+  assert.match(_internal.MAAS_CONSOLE_URL, /^https:\/\/console\.huaweicloud\.com\/modelarts\//)
+  assert.match(_internal.MAAS_API_KEY_URL, /model-studio\/authmanage$/)
 
   const open = _internal.MAAS_OPEN_INSTRUCTIONS
-  assert.ok(open.includes("console.huaweicloud.com/agentarts"), "要带控制台链接")
-  assert.ok(open.includes("批量开通模型"), "要带授权管理的步骤")
-  assert.ok(open.includes("MaaS 服务创建 API Key"), "要带鉴权管理的步骤")
+  assert.ok(open.includes("console.huaweicloud.com/modelarts"), "要带 MaaS 控制台链接")
+  assert.ok(open.includes("预置服务"), "要带开通预置服务的步骤")
+  assert.ok(open.includes("API Key 管理"), "要带创建 API Key 的步骤")
   assert.ok(open.includes("同一个华为云账号"), "要如实说控制台要登录就用同一账号")
   assert.ok(open.includes("没法替你登进去"), "不能假装凭据能换控制台会话")
 
