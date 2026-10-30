@@ -1,4 +1,4 @@
-## 未发布
+## 0.1.24 — 2026-10-31
 
 - **新增：复用 OfficeAce 客户端登录态** —— 点「重新登录」时先读 `~/.office-claw/session.cookie`（DPAPI，只读）拿 `oc_sid`，请求本地 `https://127.0.0.1:3003/api/islogin` 判断客户端当前登录的账号；若 magpie 里已有该 `account_id` 的凭据，就直接完成登录 —— **不打开任何登录页**。客户端没开/没登录/账号不匹配才回退华为云 OAuth。实测：客户端登录的是 181****0632，`authorize()` 约 2 秒返回 `opened:true`、`url:`、说明「已复用 OfficeAce 客户端的登录态（181****0632），无需再次登录」，callback 直接 success。另查：leveldb 的 `office-claw-sessionId` 是过期 Bearer（401），当前 `sessionId` 只能调本地 `/api/messages` 会话协议（非 OpenAI 兼容），聊天直连未采用。
 
