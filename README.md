@@ -96,6 +96,14 @@ magpie 每天调一次 `POST /v1/subscription/bonus/claim`，领当日签到积�
 
 **开通本身只能你在控制台点，插件不能替你做**（已查证，见下）：控制台是**浏览器 cookie 会话**（`J_SESSION_ID`），插件的 OAuth 凭据是 API 凭证 —— 华为云**没有**「拿 access_token 换控制台 session」的公开接口（控制台免登只有账号级配置的 SAML/OIDC 联邦认证这一条路，要管理员在账号里配 IdP）。所以打开控制台后如果要求登录，用**同一个华为云账号**登录一下即可；插件不会假装能替你登进去。
 
+**复用 OfficeAce 客户端登录态（不用再登一次）**：如果本机 OfficeAce 桌面客户端正在运行且已登录，点「重新登录」时插件会先读
+`~/.office-claw/session.cookie`（`OC-DPAPI-1` + DPAPI(CurrentUser)，只读），用里面的 `oc_sid` 请求
+`https://127.0.0.1:3003/api/islogin`，拿到当前登录账号的 `userId`（`account_id:user_id`）。如果 magpie 里已经存着这个
+`account_id` 的凭据 —— **直接完成登录，不打开任何登录页**。客户端没开 / 没登录 / 账号不匹配 → 才回退到华为云 OAuth（原行为）。
+
+> 注：`office-claw-sessionId`（leveldb 里的 UUID）是**过期**的 Bearer；服务端只认 `/api/islogin` 返回的当前 `sessionId`。
+> 聊天直连 OfficeAce 本地 API 也不可行：它用的是 `POST /api/messages` 的会话协议，不是 OpenAI 兼容接口。
+
 **受控浏览器（把华为云登录态留下来）**：插件不再把控制台链接丢给系统浏览器，而是自己起一个**受控 Chromium**
 （Chrome / Edge / Brave，持久 `--user-data-dir`，每个账号一个 profile）：
 
