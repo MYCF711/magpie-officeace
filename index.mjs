@@ -47,7 +47,7 @@ import { beginLogin, refreshOnce } from "./src/login.mjs"
 import { checkin, fetchCatalog, fetchTokenRates, fetchUsage } from "./src/api.mjs"
 import { chatFetch } from "./src/chat.mjs"
 import { staticModels, liveModels } from "./src/models.mjs"
-import { checkMaasAccess, watchMaasAccess } from "./src/maas.mjs"
+import { checkMaasAccess, watchMaasAccess, probeMaasAccess } from "./src/maas.mjs"
 
 const PROVIDER = "officeace"
 const PROVIDER_NAME = "OfficeAce"
@@ -63,23 +63,35 @@ const MAAS_CONSOLE_URL = "https://console.huaweicloud.com/agentarts/"
 const MAAS_STEPS =
   "管理中心 → 授权管理 →「模型」页签 →「批量开通模型」；再「鉴权管理」→ 在 MaaS 服务创建 API Key → 确定。"
 
-/** 华为云登录那条路的说明：如实说清它不是开通 MaaS。 */
-const MAAS_OAUTH_INSTRUCTIONS =
-  "在打开的页面里完成华为云登录，本窗口会自动继续。" +
-  "（这一步是华为云登录本身，不会替你开通 MaaS；只是还没接入 MaaS 的话，请改用「去 AgentArts 控制台开通 MaaS」）"
-
-/** 控制台那条路的说明：说清「不会重新登录」+ 会用已保存的登录态检测。 */
+/**
+ * 落进控制台那条路时给用户看的话。
+ *
+ * ⚠ 如实写：插件**不能**把 OAuth 凭据变成控制台的会话（控制台是 cookie 会话，
+ *   华为云没有「拿 access_token 换控制台 session」的公开接口，只有账号级配置的
+ *   SAML/OIDC 联邦认证）。所以只说「要登录就用同一个华为云账号登一下」。
+ */
 const MAAS_OPEN_INSTRUCTIONS =
-  "这一步不会重新登录华为云：插件用你已保存的登录态检测开通结果。" +
-  "请在打开的 AgentArts 控制台（" +
+  "已保存的登录态能调通华为云，但这个账号还没开通 MaaS —— 打开的是 AgentArts 控制台（" +
   MAAS_CONSOLE_URL +
-  "）里完成 MaaS 开通 —— " +
+  "），请在这里完成开通：" +
   MAAS_STEPS +
   "。开通后回到本窗口，插件会自己检测到并完成。" +
-  "如果控制台要求登录，用同一个华为云账号登录即可（那是控制台自己的登录，不是插件重新登录）。"
+  "控制台如果要你登录，用**同一个华为云账号**登录一下即可（控制台用的是浏览器会话，插件的凭据没法替你登进去）。"
+
+/** 已经开通时（点了登录但账号其实是好的）：不需要用户做任何事。 */
+const MAAS_ALREADY_INSTRUCTIONS =
+  "这个账号的 MaaS 已经开通，额度读取正常；本窗口会直接完成，不需要再做任何事。" +
+  "（打开的控制台只是顺带，可以直接关掉。）"
+
+/** 凭据被拒 / 没有凭据 → 走真正的华为云登录时说的话。 */
+const MAAS_OAUTH_INSTRUCTIONS =
+  "已保存的登录态不能用了（或还没有登录态），这里走的是**华为云登录**：在打开的页面里完成登录，本窗口会自动继续。" +
+  "登录成功后，如果额度仍然显示「未接入 MaaS」，再点一次「重新登录」——那时插件会直接带你到 AgentArts 控制台去开通。" +
+  "这一步不会替你开通 MaaS。"
 
 const DEFAULT_MAAS_WATCH_MS = 3 * 60_000
 const DEFAULT_MAAS_WATCH_INTERVAL_MS = 5_000
+const DEFAULT_MAAS_PROBE_MS = 1_200
 
 /**
  * 见过「有凭据、但没有 MaaS appKey」的账号：身份 → 那份凭据。
@@ -91,6 +103,23 @@ const DEFAULT_MAAS_WATCH_INTERVAL_MS = 5_000
  */
 const maasPending = new Map()
 
+/**
+ * 把一份凭据变成 magpie 的登录结果。
+ *
+ * ⚠ 控制台那两条路**没有新登录**：回写的还是同一份凭据（可能多了刚检测到的
+ *   MaaS 字段）。magpie 会因此重读额度，卡片上的「未接入 MaaS」随之消失。
+ */
+function successOf(cred) {
+  const identified = cred
+  return {
+    type: "success",
+    refresh: identified.refreshToken ?? "",
+    access: JSON.stringify(identified),
+    expires: Date.parse(identified.expiresAt ?? "") || Date.now() + 3600_000,
+    ...accountIdentityOf(identified),
+  }
+}
+
 /** 记住/忘掉用的键：解析得出的身份优先，拿不到就退到 accountId / refreshToken。 */
 function maasPendingKey(cred) {
   return accountIdentityOf(cred).id || cred?.accountId || cred?.refreshToken || PROVIDER
@@ -98,7 +127,16 @@ function maasPendingKey(cred) {
 
 function noteMaasPending(cred) {
   if (!cred) return
-  maasPending.set(maasPendingKey(cred), cred)
+  const key = maasPendingKey(cred)
+  // 删了再放：最近见过的排到最后，latestMaasPending() 取的才是新的那份
+  maasPending.delete(key)
+  maasPending.set(key, cred)
+}
+
+/** 最近一次见到的、还没接 MaaS 的那份凭据（没有就是 null）。 */
+function latestMaasPending() {
+  const all = [...maasPending.values()]
+  return all.length > 0 ? all[all.length - 1] : null
 }
 
 function forgetMaasPending(cred) {
@@ -118,6 +156,9 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
       : DEFAULT_MAAS_WATCH_INTERVAL_MS
   // 只有新代码用得上：允许测试注入 fetch（其余调用点仍用全局 fetch，与旧版一致）
   const maasFetcher = typeof options?.fetch === "function" ? options.fetch : (...args) => fetch(...args)
+  const maasProbeMs = Number.isFinite(options?.maasProbeMs) && options.maasProbeMs > 0 ? options.maasProbeMs : DEFAULT_MAAS_PROBE_MS
+  // 测试注入：真实的 beginLogin 会去 CLAW 注册 state 并后台轮询 10 分钟
+  const startLogin = typeof options?.beginLogin === "function" ? options.beginLogin : beginLogin
 
   const log = (msg, level = "info") => {
     try {
@@ -151,16 +192,73 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
       refreshLead: EXPIRY_LEAD_MS,
 
       // ═══ ② 登录 ═══════════════════════════════════════════════════
+      /**
+       * ⚠ 只有一个入口，进去之后自己分流（用户不用选）：
+       *
+       *   ① 手里有已保存的登录态 → 先用它打一次 MaaS 侧接口（**短超时**，默认 1.2s）
+       *      ・granted     → 已开通：打开控制台给用户用，本窗口直接完成
+       *      ・not-granted → 没开通：打开 AgentArts 控制台，轮询检测开通
+       *      ・unknown     → 读不通（网络/超时）：按没开通处理（控制台可能仍是好的）
+       *   ② dead（401/403）或根本没有登录态 → 走华为云 OAuth 登录
+       *
+       * ⚠ authorize() 必须立刻返回：探测用的是短超时，不是常规的 30s。
+       *   真正的等待都在 callback() 里。
+       */
       methods: [
         {
           type: "oauth",
-          label: "华为云账号（浏览器）",
-          /**
-           * ⚠ 立刻返回，不能在这里等用户完成登录 —— 真正等的是 callback()。
-           *   死等会让双方互等（magpie 要等 url 才开浏览器）。
-           */
+          label: "华为云账号",
           async authorize() {
-            const started = await beginLogin()
+            const pending = latestMaasPending()
+            const probed = pending
+              ? await probeMaasAccess(pending, maasFetcher, { timeoutMs: maasProbeMs })
+              : { route: "dead", credential: null }
+            const route = probed.route
+
+            // ①-a 已经开通：不用轮询，直接完成（顺带把控制台开给用户）
+            if (route === "granted" && probed.credential) {
+              const ready = probed.credential
+              return {
+                url: MAAS_CONSOLE_URL,
+                instructions: MAAS_ALREADY_INSTRUCTIONS,
+                method: "auto",
+                async callback() {
+                  return successOf(ready)
+                },
+              }
+            }
+
+            // ①-b 凭据有效、MaaS 没开通（或这次读不通）：开控制台 + 轮询
+            const use = probed.credential
+            if ((route === "not-granted" || route === "unknown") && use) {
+              return {
+                url: MAAS_CONSOLE_URL,
+                instructions: MAAS_OPEN_INSTRUCTIONS,
+                method: "auto",
+                async callback() {
+                  const granted = await watchMaasAccess(use, {
+                    fetcher: maasFetcher,
+                    timeoutMs: maasWatchMs,
+                    intervalMs: maasWatchIntervalMs,
+                    renew: (c) => refreshOnce(c),
+                  }).catch(() => null)
+
+                  if (!granted) {
+                    return {
+                      type: "failed",
+                      error:
+                        "还没有检测到 MaaS 开通。在控制台完成开通（授权管理 →「批量开通模型」／「鉴权管理」）后，回到这张卡再点一次「重新登录」即可。" +
+                        (route === "unknown" ? " 另外这一次没能读通华为云（可能是网络或凭据问题），如果一直读不通，请重新登录一次。" : "") +
+                        " 额度与签到不受影响。",
+                    }
+                  }
+                  return successOf(granted)
+                },
+              }
+            }
+
+            // ② 凭据不能用（或没有）：真正的华为云登录
+            const started = await startLogin()
             return {
               url: started.url,
               instructions: MAAS_OAUTH_INSTRUCTIONS,
@@ -171,6 +269,7 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
                   const cred = await started.result
                   // 卡片名用手机号，不用 domain id（见 src/phone.mjs 顶部）
                   const identified = { ...cred, ...(await phoneField(cred)) }
+                  if (!identified.modelAppKey) noteMaasPending(identified)
                   return {
                     type: "success",
                     // magpie 的 refreshLead 机制读这个
@@ -183,63 +282,6 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
                   }
                 } catch (e) {
                   return { type: "failed", error: String(e?.message ?? e).slice(0, 500) }
-                }
-              },
-            }
-          },
-        },
-        {
-          type: "oauth",
-          label: "去 AgentArts 控制台开通 MaaS",
-          /**
-           * 已登录、只差开通 MaaS 的账号走这条：**不开华为云登录页**，
-           * 直接打开 AgentArts 控制台，并用插件已保存的登录态轮询开通结果。
-           *
-           * ⚠ 这条没有 OAuth 回调：callback() 只做「等开通成功」这一件事。
-           *   magpie 打开 url 的条件是 `opened !== true`（见 host.js / plugins.go），
-           *   所以这里**不要**设 opened。
-           */
-          async authorize() {
-            const pending = [...maasPending.values()][0] ?? null
-            return {
-              url: MAAS_CONSOLE_URL,
-              instructions: MAAS_OPEN_INSTRUCTIONS,
-              method: "auto",
-
-              async callback() {
-                if (!pending) {
-                  return {
-                    type: "failed",
-                    error:
-                      "没有可检测的登录态：请先用「华为云账号（浏览器）」登录一次，再回到这张卡点「去 AgentArts 控制台开通 MaaS」。",
-                  }
-                }
-                const granted = await watchMaasAccess(pending, {
-                  fetcher: maasFetcher,
-                  timeoutMs: maasWatchMs,
-                  intervalMs: maasWatchIntervalMs,
-                  renew: (c) => refreshOnce(c),
-                }).catch(() => null)
-
-                if (!granted) {
-                  return {
-                    type: "failed",
-                    error:
-                      "还没有检测到 MaaS 开通。在控制台完成开通（授权管理 →「批量开通模型」／「鉴权管理」）后，回到这张卡再点一次本项即可。额度与签到不受影响。",
-                  }
-                }
-                // 用同一份凭据回写（没有新登录）：magpie 会重读额度，
-                // 卡片上的「未接入 MaaS」随之消失。
-                const identified = {
-                  ...granted,
-                  ...(pending.user_phone && !granted.user_phone ? { user_phone: pending.user_phone } : {}),
-                }
-                return {
-                  type: "success",
-                  refresh: identified.refreshToken ?? "",
-                  access: JSON.stringify(identified),
-                  expires: Date.parse(identified.expiresAt ?? "") || Date.now() + 3600_000,
-                  ...accountIdentityOf(identified),
                 }
               },
             }
@@ -523,10 +565,14 @@ export const _internal = {
   MAAS_STEPS,
   MAAS_OAUTH_INSTRUCTIONS,
   MAAS_OPEN_INSTRUCTIONS,
+  MAAS_ALREADY_INSTRUCTIONS,
   maasPending,
   maasPendingKey,
   noteMaasPending,
   forgetMaasPending,
+  latestMaasPending,
+  successOf,
   checkMaasAccess,
   watchMaasAccess,
+  probeMaasAccess,
 }
