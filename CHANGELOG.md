@@ -3,6 +3,10 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与发布流程见 [magpie-plugin-scaffold](https://github.com/MYCF711/magpie-plugin-scaffold) 的 [UPDATING.md](https://github.com/MYCF711/magpie-plugin-scaffold/blob/main/UPDATING.md)。
 
+## 未发布
+
+- **改进：未接入 MaaS 的账号在卡片上标「未接入 MaaS」并给出「Sign in again」按钮** —— `usage()` 在没有 `modelAppKey` 时返回 `plan: "未接入 MaaS"` + `signIn: "expired"`（不用 `error`：它会顶掉额度条、让账号从额度表消失，路由还会把「未知」当成「没用过」优先选它）；按钮本身走登录流程，登录说明里附 AgentArts 控制台「授权管理 → 批量开通模型 / 鉴权管理」的官方步骤。多账号时按钮只能按 provider 级判断、对不准具体卡片；「同浏览器 SSO 免登」未实测（README 已写明）
+
 ## 0.1.15 — 2026-10-30
 
 - **改进：未接入 MaaS 的 400 文案给出两条可执行路径** —— 从只说「去 OfficeAce 客户端完成接入」改为逐步骤的两条路（① OfficeAce 客户端「模型 → 接入模型 → 接入华为云 MaaS 模型」；② AgentArts 控制台「授权管理 → 批量开通模型 / 鉴权管理」）并附官方步骤链接；`MaaSNotLinked` 的 `code` / `type` / `status` 一字未动
