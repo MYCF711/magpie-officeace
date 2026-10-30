@@ -185,7 +185,10 @@ export const OfficeAceAuthPlugin = async ({ client } = {}) => {
                   error: {
                     message:
                       "OfficeAce 账号已登录，但还没有接入华为云 MaaS（凭据里没有 modelAppKey）。" +
-                      "请在 OfficeAce 客户端完成「接入华为云 MaaS 模型」后重试；" +
+                      "两条路都行：\n" +
+                      "① OfficeAce 客户端：左侧「模型」→ 右上角「接入模型」→「接入华为云 MaaS 模型」→ 接入类型选「华为云 MaaS 按需计费」→ 填 MaaS 控制台创建的 API Key → 连通性测试 → 确认。\n" +
+                      "② AgentArts 控制台：管理中心 → 授权管理 →「模型」页签 →「批量开通模型」；再「鉴权管理」→ 在 MaaS 服务创建 API Key → 确定。\n" +
+                      "步骤：https://support.huaweicloud.com/usermanual-officeace/officeace_02_0018.html\n" +
                       "额度与签到不受影响，已经可以正常使用。",
                     type: "officeace_maas_not_linked",
                     code: "MaaSNotLinked",
