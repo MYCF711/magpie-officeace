@@ -71,6 +71,11 @@ magpie 每天调一次 `POST /v1/subscription/bonus/claim`，领当日签到积�
 - 账号卡片上的 plan 显示 **「未接入 MaaS」**（`usage().plan`，只影响显示，不参与路由/额度判定）
 - magpie 在那张卡上显示 **「Sign-in required」**；点「重新登录」走的是**同一个入口**，进去之后插件自己判断该做什么
 
+**模型从哪来（重要）**：OfficeAce 的模型走的是华为云 **`modelgw-*.officeace.cn-southwest-2.huaweicloud-agentarts.com`** 网关，
+凭据是 `GET /v1/claw/client-permission-validate` 返回的 `subscription.model_info.model_auth_info`（`model_app_key` / `model_app_secret`，Basic 认证）—— **不是 MaaS 控制台里创建的那个 API Key**。
+老版本插件写过一些「只有 STS、没有 modelAppKey」的记录；现在 `usage()` / `loader()` / `models()` / chat 会先向云端补一次 `model_info`
+（按账号缓存 6 小时），补到就直接用 —— **登录完就能用模型，不用去 MaaS 控制台建 key**。
+
 **凭据从哪来**：内存里那份（刚读过额度、最新）优先；**没有就从磁盘读** magpie 已保存的账号
 （`~/.config/magpie/plugin-auth.json`，键 `officeace` / `officeace#…`，遵循 `XDG_CONFIG_HOME`；
 只读、不写、不加锁，便携版可用 `MAGPIE_OFFICEACE_AUTH_FILE` 指路）。**magpie 重启后内存是空的，
