@@ -3,6 +3,10 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与发布流程见 [magpie-plugin-scaffold](https://github.com/MYCF711/magpie-plugin-scaffold) 的 [UPDATING.md](https://github.com/MYCF711/magpie-plugin-scaffold/blob/main/UPDATING.md)。
 
+## 未发布
+
+- **改进：未接入 MaaS 的 400 文案给出两条可执行路径** —— 从只说「去 OfficeAce 客户端完成接入」改为逐步骤的两条路（① OfficeAce 客户端「模型 → 接入模型 → 接入华为云 MaaS 模型」；② AgentArts 控制台「授权管理 → 批量开通模型 / 鉴权管理」）并附官方步骤链接；`MaaSNotLinked` 的 `code` / `type` / `status` 一字未动
+
 ## 0.1.14 — 2026-10-29
 
 - **修复：卡片上的账号名是一串 domain id（`01a1642ad2ae7f93bf6387ad2fc5f09e`），不是手机号** —— 华为云 OAuth 的 `refresh_token` 里 `user_profile` 只有 IAM 自己的 id，**从来没有手机号**；`toStored()` 又把 `cred.accountId`（domain id）当卡片名。三个账号并排时是三串看不懂的 ID，用户以为是乱码
