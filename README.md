@@ -69,7 +69,8 @@ magpie 每天调一次 `POST /v1/subscription/bonus/claim`，领当日签到积�
 账号登录成功、但还没在华为云侧接入 MaaS（凭据里没有 `modelAppKey`）时：
 
 - 账号卡片上的 plan 显示 **「未接入 MaaS」**（`usage().plan`，只影响显示，不参与路由/额度判定）
-- magpie 在那张卡上显示 **「Sign-in required」**；点「重新登录」走的是**同一个入口**，进去之后插件自己判断该做什么
+- **不会再显示「已退出登录 — 请重新登录」**：这条以前是 `signIn: "expired"` 带来的，但「缺 modelAppKey」不等于登录失效 —— 这些账号的 STS 凭据是好的（额度、签到都正常）。只有 `refresh_token` 真的失效时才会要求重新登录。
+- 这类账号的处理：**用这个账号打开一次 OfficeAce 客户端**（左侧「模型」→ 右上角「接入模型」→「接入华为云 MaaS 模型」），让云端下发模型网关信息；插件会在下一次 `usage()` 自动补上（按账号缓存 6 小时）。
 
 **模型从哪来（重要）**：OfficeAce 的模型走的是华为云 **`modelgw-*.officeace.cn-southwest-2.huaweicloud-agentarts.com`** 网关，
 凭据是 `GET /v1/claw/client-permission-validate` 返回的 `subscription.model_info.model_auth_info`（`model_app_key` / `model_app_secret`，Basic 认证）—— **不是 MaaS 控制台里创建的那个 API Key**。
