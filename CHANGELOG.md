@@ -1,4 +1,4 @@
-## 未发布
+## 0.1.22 — 2026-10-31
 
 - **修复：老记录不再被误判「未接入 MaaS」** —— 旧版插件写的记录可能只有 STS、没有 `modelAppKey`（例如 181****0632），但云端 `GET /v1/claw/client-permission-validate` 其实已经返回了 `model_info.model_auth_info`（`modelgw-*.officeace...` 网关的 Basic 凭据）。现在 `usage()` / `loader()` / `models()` / chat 检测到缺字段会先向云端补一次（按账号缓存 6 小时），补到就直接用 —— **登录完就能用 deepseek-v4.1-flash 等模型，不需要去 MaaS 控制台创建 API Key**。实测：181****0632 的旧记录补全后 `usage → 个人体验版（3 个额度桶）`、`models → 7 个（含 deepseek-v4.1-flash）`
 
