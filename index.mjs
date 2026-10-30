@@ -49,6 +49,7 @@ import { chatFetch } from "./src/chat.mjs"
 import { staticModels, liveModels } from "./src/models.mjs"
 import { checkMaasAccess, watchMaasAccess, probeMaasAccess } from "./src/maas.mjs"
 import { readOfficeAceAccounts, pickOfficeAceCredential, officeAceAuthFile } from "./src/accounts.mjs"
+import { probeClientLogin } from "./src/officeace-client.mjs"
 import { openConsoleWindow, waitForLoginAndSave, loadSavedCookies, primeSession, closeWindow, CONSOLE_URL } from "./src/console-browser.mjs"
 
 const PROVIDER = "officeace"
@@ -126,6 +127,23 @@ const maasPending = new Map()
  * ⚠ 控制台那两条路**没有新登录**：回写的还是同一份凭据（可能多了刚检测到的
  *   MaaS 字段）。magpie 会因此重读额度，卡片上的「未接入 MaaS」随之消失。
  */
+/**
+ * 取某个凭据的云端 account_id（用于和 OfficeAce 客户端的 userId 对齐）。
+ * 老记录里可能没存 accountId —— 读一次权限接口补上（按身份缓存）。
+ */
+const accountIdCache = new Map()
+async function accountIdOfCredential(cred, fetcher) {
+  if (!cred) return ""
+  if (cred.accountId) return cred.accountId
+  const key = accountIdentityOf(cred).id || cred.refreshToken || "default"
+  const hit = accountIdCache.get(key)
+  if (hit) return hit
+  const r = await checkMaasAccess(cred, fetcher, { timeoutMs: 3_000 }).catch(() => null)
+  const id = r?.accountId || ""
+  if (id) accountIdCache.set(key, id)
+  return id
+}
+
 function successOf(cred) {
   const identified = cred
   return {
@@ -262,6 +280,42 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
           type: "oauth",
           label: "华为云账号",
           async authorize() {
+            // 0) OfficeAce 客户端已经登录 → 直接复用它的账号，不打开登录页。
+            //    客户端把当前用户写在 `~/.office-claw/session.cookie`（DPAPI）；
+            //    用它的 oc_sid 问 https://127.0.0.1:3003/api/islogin 就知道是谁。
+            //    只要 magpie 里已有这个 account_id 的凭据，就没必要再走 OAuth。
+            const probeClient = typeof options?.probeClient === "function" ? options.probeClient : probeClientLogin
+            let client = null
+            try {
+              client = await probeClient({ env: process.env })
+            } catch {
+              client = null
+            }
+            if (client?.loggedIn && client.accountId) {
+              const entries = readOfficeAceAccounts({ file: authFile })
+              // 并行拿 account_id（每个都是一次只读 GET，有 6 小时缓存）
+              const ids = await Promise.all(entries.map((e) => accountIdOfCredential(e.cred, maasFetcher)))
+              const match = entries[ids.indexOf(client.accountId)]
+              if (match) {
+                const entry = match
+                let ready = entry.cred
+                if (needsRefresh(ready) && ready.refreshToken) {
+                  try { ready = (await refreshOnce(ready)) ?? ready } catch {}
+                }
+                return {
+                  // 插件自己完成，不需要 magpie 开浏览器
+                  url: "",
+                  opened: true,
+                  instructions:
+                    `已复用 OfficeAce 客户端的登录态（${ready.user_phone || client.userName || client.accountId}），无需再次登录。`,
+                  method: "auto",
+                  async callback() {
+                    return successOf(ready)
+                  },
+                }
+              }
+            }
+
             // 已保存的登录态：内存里那份（刚读过额度，最新）优先；没有就从磁盘
             // 读 magpie 存下的账号 —— magpie 一重启内存就是空的，只看内存会把
             // 「明明有凭据」的用户送去登录页。
