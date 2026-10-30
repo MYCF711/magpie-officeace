@@ -69,12 +69,14 @@ export async function checkMaasAccess(cred, fetcher = fetch, opts = {}) {
   const info = j?.subscription?.model_info
   const auth = info?.model_auth_info
   const base = info?.model_api_url_base
+  const accountId = typeof j?.account_id === "string" ? j.account_id : ""
   if (typeof auth?.model_app_key !== "string" || typeof auth.model_app_secret !== "string") {
-    return { ok: true, granted: false }
+    return { ok: true, granted: false, accountId }
   }
   return {
     ok: true,
     granted: true,
+    accountId,
     modelAppKey: auth.model_app_key,
     modelAppSecret: auth.model_app_secret,
     maasBaseUrl: typeof base === "string" && base.length > 0 ? base : "",

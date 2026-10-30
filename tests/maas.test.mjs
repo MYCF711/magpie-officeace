@@ -78,6 +78,51 @@ test("usage：有 modelAppKey 的账号两个字段都不给", async () => {
   assert.equal("signIn" in out, false)
 })
 
+// ---- 复用 OfficeAce 客户端登录态（authorize 快路径）-----------------------
+
+test("authorize：OfficeAce 客户端已登录且账号在 magpie 里 → 不开登录页，直接成功", async () => {
+  const authFile = writeAuthFile(tempAuthFile(), {
+    officeace: record({ ...withMaas, accountId: "acc-1", user_phone: "181****0632", expiresAt: new Date(Date.now() + 3600_000).toISOString() }),
+  })
+  let beganLogin = false
+  const plugin = await OfficeAceAuthPlugin(
+    {},
+    {
+      authFile,
+      fetch: noModelInfo,
+      beginLogin: async () => { beganLogin = true; throw new Error("不该走 OAuth") },
+      probeClient: async () => ({ loggedIn: true, accountId: "acc-1", userName: "hw1", sessionId: "sid" }),
+    },
+  )
+  const r = await plugin.auth.methods[0].authorize()
+  assert.equal(r.opened, true)
+  assert.equal(r.url, "")
+  assert.match(r.instructions, /已复用 OfficeAce 客户端的登录态/)
+  const done = await r.callback()
+  assert.equal(done.type, "success")
+  assert.equal(JSON.parse(done.access).accountId, "acc-1")
+  assert.equal(beganLogin, false, "不能打开任何登录页")
+})
+
+test("authorize：OfficeAce 客户端登录的是别的账号 → 回退现有 OAuth", async () => {
+  const authFile = writeAuthFile(tempAuthFile(), {
+    officeace: record({ ...withMaas, accountId: "acc-1", expiresAt: new Date(Date.now() + 3600_000).toISOString() }),
+  })
+  let beganLogin = 0
+  const plugin = await OfficeAceAuthPlugin(
+    {},
+    {
+      authFile,
+      fetch: noModelInfo,
+      beginLogin: async () => { beganLogin += 1; return { url: "https://auth.huaweicloud.com/authui/login.html?service=stub", result: Promise.resolve(withMaas) } },
+      probeClient: async () => ({ loggedIn: true, accountId: "acc-2", userName: "hw2" }),
+    },
+  )
+  const r = await plugin.auth.methods[0].authorize()
+  assert.equal(beganLogin, 1)
+  assert.match(String(r.url), /auth\.huaweicloud\.com/)
+})
+
 // ---- 单入口：先拿已保存的凭据探，探不通才登录 -----------------------------
 
 /** 一个「永远不该被调用的登录」替身：真 beginLogin 会去 CLAW 注册 state 并后台轮询 10 分钟。 */

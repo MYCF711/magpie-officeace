@@ -1,3 +1,7 @@
+## 0.1.24 — 2026-10-31
+
+- **新增：复用 OfficeAce 客户端登录态** —— 点「重新登录」时先读 `~/.office-claw/session.cookie`（DPAPI，只读）拿 `oc_sid`，请求本地 `https://127.0.0.1:3003/api/islogin` 判断客户端当前登录的账号；若 magpie 里已有该 `account_id` 的凭据，就直接完成登录 —— **不打开任何登录页**。客户端没开/没登录/账号不匹配才回退华为云 OAuth。实测：客户端登录的是 181****0632，`authorize()` 约 2 秒返回 `opened:true`、`url:`、说明「已复用 OfficeAce 客户端的登录态（181****0632），无需再次登录」，callback 直接 success。另查：leveldb 的 `office-claw-sessionId` 是过期 Bearer（401），当前 `sessionId` 只能调本地 `/api/messages` 会话协议（非 OpenAI 兼容），聊天直连未采用。
+
 ## 0.1.23 — 2026-10-31
 
 - **修复：缺 modelAppKey 时不再误标「已退出登录」** —— 以前 `usage()` 在 `maasMissing` 时返回 `signIn: "expired"`，magpie 于是显示「已退出登录 — 请在此账号上选择重新登录」，但这些账号的 STS 凭据是好的（额度、签到正常），只是云端没下发 model_info（例如 181****6710 / 180****2361 / 187****5670）。现在只标 `plan: "未接入 MaaS"`，并说明「用这个账号打开一次 OfficeAce 客户端接入模型」；只有 refresh_token 真失效才要求重新登录。另：旧记录补全现在会对四个号逐个验证（181****0632 云端有 model_info → 自动恢复可用；其余三个云端确实没有，如实显示）
