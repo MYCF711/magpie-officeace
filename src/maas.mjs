@@ -29,8 +29,9 @@ import { signHuaweiRequest } from "./crypto.mjs"
  *                   {ok: false, status: number, detail: string}>}
  *   `ok: false` 是**这次读失败**（网络/签名/HTTP），不代表没开通。
  */
-export async function checkMaasAccess(cred, fetcher = fetch) {
+export async function checkMaasAccess(cred, fetcher = fetch, opts = {}) {
   if (!cred?.access || !cred?.securityToken) return { ok: false, status: 0, detail: "凭据缺 access / securityToken" }
+  const timeoutMs = Number.isFinite(opts?.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : REQUEST_TIMEOUT_MS
 
   const url = `${CLAW_BASE}${PERMISSION_PATH}`
   const headers = {
@@ -39,12 +40,20 @@ export async function checkMaasAccess(cred, fetcher = fetch) {
   }
   if (cred.projectId) headers["x-project-id"] = cred.projectId
 
+  // ⚠ 不用 AbortSignal.timeout()：它的计时器**是 unref 的** —— 事件循环一空，
+  //   进程先于计时器退出，那次「卡住的请求」就永远不 settle（CI 上就是这样把
+  //   测试挂住、被 node --test 判成 cancelledByParent）。自己拿一个普通
+  //   setTimeout（ref 住），并在结束前一定 clearTimeout。
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(new Error(`请求超过 ${timeoutMs}ms 未响应`)), timeoutMs)
   let r
   try {
     const signed = signHuaweiRequest("GET", url, headers, "", cred.access, cred.secret)
-    r = await fetcher(url, { method: "GET", headers: signed, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
+    r = await fetcher(url, { method: "GET", headers: signed, signal: ac.signal })
   } catch (e) {
     return { ok: false, status: 0, detail: String(e?.message ?? e).slice(0, 200) }
+  } finally {
+    clearTimeout(timer)
   }
 
   const text = await r.text().catch(() => "")
@@ -116,4 +125,29 @@ export async function watchMaasAccess(cred, opts = {}) {
     if (now() >= deadline) return null
     await sleep(Math.max(0, Math.min(intervalMs, deadline - now())))
   }
+}
+
+/**
+ * `authorize()` 里那一次「先拿已保存的凭据试一下」。
+ *
+ * 只做一次读，且**必须很快**（`authorize()` 要立刻返回）—— 所以给一个短超时。
+ *
+ * @returns {Promise<{route: "granted"|"not-granted"|"dead"|"unknown", credential: object|null}>}
+ *   granted     已经接入 MaaS：`credential` 是合并了 MaaS 字段的那份（直接回写即可）
+ *   not-granted 凭据有效、但 MaaS 没开通（开控制台让用户去开通）
+ *   dead        凭据被拒（401/403）或没有凭据（要重新登录）
+ *   unknown     读失败但不是明确被拒（网络/超时）—— 当作 not-granted 处理
+ */
+export async function probeMaasAccess(cred, fetcher = fetch, opts = {}) {
+  if (!cred) return { route: "dead", credential: null }
+  const r = await checkMaasAccess(cred, fetcher, { timeoutMs: opts?.timeoutMs }).catch(() => ({ ok: false, status: 0 }))
+  if (r.ok && r.granted) {
+    return {
+      route: "granted",
+      credential: { ...cred, modelAppKey: r.modelAppKey, modelAppSecret: r.modelAppSecret, maasBaseUrl: r.maasBaseUrl },
+    }
+  }
+  if (r.ok) return { route: "not-granted", credential: cred }
+  if (r.status === 401 || r.status === 403) return { route: "dead", credential: null }
+  return { route: "unknown", credential: cred }
 }
