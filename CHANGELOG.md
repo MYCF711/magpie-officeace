@@ -1,4 +1,4 @@
-## 未发布
+## 0.1.20 — 2026-10-31
 
 - **修正：没开通 MaaS 时打开的是 MaaS（ModelArts）控制台，不是 AgentArts 授权页** —— 原来的说明让人去 AgentArts「授权管理 → 批量开通模型」，那是 AgentArts 自己的授权，**不开通 MaaS 的预置服务**。现在指向 MaaS 控制台（`model-studio`：在线推理 → 预置服务「开通服务」；管理与统计 → API Key 管理「创建 API Key」），并如实写明为什么插件不能替你开通（开通预置服务没有公开 OpenAPI；API Key 的 OpenAPI 要 IAM token，且把 Key 绑给 OfficeAce 也没有公开接口）
 
