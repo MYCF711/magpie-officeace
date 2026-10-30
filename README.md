@@ -64,16 +64,34 @@ magpie 每天调一次 `POST /v1/subscription/bonus/claim`，领当日签到积�
 
 ---
 
-## 未接入 MaaS（卡片标记与「Sign in again」按钮）
+## 未接入 MaaS：卡片标记 + 两条登录方式
 
 账号登录成功、但还没在华为云侧接入 MaaS（凭据里没有 `modelAppKey`）时：
 
 - 账号卡片上的 plan 显示 **「未接入 MaaS」**（`usage().plan`，只影响显示，不参与路由/额度判定）
-- magpie 会在那张卡上显示 **「Sign-in required」+「Sign in again」按钮**（`usage().signIn = "expired"`）
-- **按钮字面是「Sign in again」，但实际不是要求重新登录**：点它走的是一次华为云浏览器登录（同一浏览器已有 SSO 时通常无需输入）；本包没有自己的登录落地页（浏览器最后停在 CLAW 的页面），所以接入入口写在**登录说明**里；接完 MaaS 后，下一次额度读取会看到 `modelAppKey`，标记自动清除
-- **多账号时按钮只能按 provider 级判断，对不准具体是哪张卡**：magpie 调 `authorize()` 时传的 `account` 恒为 `plugin.NewAccount`（GUI 与 CLI 都是），插件拿不到卡片对应的账号，只能按「这个 provider 有没有缺 MaaS 的账号」来决定说明文字
-- **「借同一浏览器 SSO 打开控制台」未实测**：插件登录用的就是系统默认浏览器，`console.huaweicloud.com` 与登录页同属华为云 SSO，理论上已登录；如果打开后仍要求登录，用**同一个华为云账号**登录即可。插件不能从 STS 凭证伪造网页登录态（STS 是 API 凭证，不是浏览器会话）
-- 入口的官方步骤：`https://console.huaweicloud.com/agentarts/` → 管理中心 → 授权管理 →「模型」页签 →「批量开通模型」；再「鉴权管理」→ 在 MaaS 服务创建 API Key → 确定
+- magpie 会在那张卡上显示 **「Sign-in required」**（`usage().signIn = "expired"`），点开就是下面的登录方式选择
+
+本包给这张卡**两条登录方式**，选哪条由你决定（点按钮时 magpie 会让你选）：
+
+| 方式 | 打开什么 | 会不会重新登录华为云 |
+|---|---|---|
+| **华为云账号（浏览器）** | 华为云 OAuth 登录页 | 会。这是真正的登录：换账号、加账号、凭据续期失败后重登都走它 |
+| **去 AgentArts 控制台开通 MaaS** | `https://console.huaweicloud.com/agentarts/` | **不会**。它直接用插件里已保存的登录态轮询检测，完全不发登录请求 |
+
+「去 AgentArts 控制台开通 MaaS」的完整行为：
+
+1. magpie 打开 AgentArts 控制台（插件只给地址，不自己开页面）
+2. 在控制台里完成开通：管理中心 → 授权管理 →「模型」页签 →「批量开通模型」；再「鉴权管理」→ 在 MaaS 服务创建 API Key → 确定
+3. 插件用**已保存的那份凭据**每 5 秒读一次 `client-permission-validate`（只读），最多等 3 分钟
+4. 检测到 `model_auth_info` 就把它合并进**同一份记录**回写（没有新登录、没有新账号），magpie 重读额度，卡片标记消失
+5. 等待超时会如实报「还没有检测到 MaaS 开通」，并让你开好后回卡片再点一次 —— 不会假装成功
+
+已知边界，别指望它做到：
+
+- **多账号时这条按 provider 级判断**：magpie 调 `authorize()` 传的 `account` 恒为 `plugin.NewAccount`（GUI 与 CLI 都是），插件拿不到「是哪张卡」。所以控制台按你浏览器里当前登录的账号开出；要开通的是另一个账号时，先在控制台右上角切账号。
+- **控制台同浏览器是否已登录未实测**：控制台与登录页同属华为云 SSO，理论上已登录；如果要求登录，用**同一个华为云账号**登录即可（那是控制台自己的登录）。插件不能从 STS 凭据伪造网页登录态（STS 是 API 凭证，不是浏览器会话）。
+- **已经接好 MaaS 的账号**不需要这两条里的任何一条：额度读取会自动看到 `modelAppKey`。
+- 插件选项 `maasWatchMs`（默认 180000）与 `maasWatchIntervalMs`（默认 5000）可以调检测时长与间隔。
 
 ---
 
