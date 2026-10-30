@@ -71,6 +71,12 @@ magpie 每天调一次 `POST /v1/subscription/bonus/claim`，领当日签到积�
 - 账号卡片上的 plan 显示 **「未接入 MaaS」**（`usage().plan`，只影响显示，不参与路由/额度判定）
 - magpie 在那张卡上显示 **「Sign-in required」**；点「重新登录」走的是**同一个入口**，进去之后插件自己判断该做什么
 
+**凭据从哪来**：内存里那份（刚读过额度、最新）优先；**没有就从磁盘读** magpie 已保存的账号
+（`~/.config/magpie/plugin-auth.json`，键 `officeace` / `officeace#…`，遵循 `XDG_CONFIG_HOME`；
+只读、不写、不加锁，便携版可用 `MAGPIE_OFFICEACE_AUTH_FILE` 指路）。**magpie 重启后内存是空的，
+凭据仍在磁盘上** —— 这时照样复用，不要求重新登录。凭据已过期/临期且带 `refresh_token` 时，
+先续一次再探测（续不动才走登录）。
+
 **单入口的分流**（`authorize()` 里先做一次**很短**的探测，默认 1.2 秒）：
 
 ```
@@ -88,7 +94,8 @@ magpie 每天调一次 `POST /v1/subscription/bonus/claim`，领当日签到积�
 
 - **多账号时按 provider 级判断**：magpie 调 `authorize()` 传的 `account` 恒为 `plugin.NewAccount`（GUI 与 CLI 都是），插件拿不到「是哪张卡」。探测用的是**最近一次见过**的那份未接 MaaS 的凭据；控制台按你浏览器里当前登录的账号开出，要开通的是另一个账号时在控制台右上角切账号。
 - **已经接好 MaaS 的账号**：探测会说「已经开通」，本窗口直接完成。
-- 插件选项：`maasProbeMs`（默认 1200，`authorize()` 里那次探测的超时）、`maasWatchMs`（默认 180000）、`maasWatchIntervalMs`（默认 5000）。
+- **续期与放弃**：只有在凭据临期时才会续一次；万一续完你就关掉了窗口，那份新凭据来不及写回 magpie（插件不写账号文件），下次可能要求重新登录一次。
+- 插件选项：`maasProbeMs`（默认 1200，`authorize()` 里那次探测的超时）、`maasWatchMs`（默认 180000）、`maasWatchIntervalMs`（默认 5000）、`authFile`（账号文件位置，默认按上面的规则推导）。
 
 ---
 

@@ -48,6 +48,7 @@ import { checkin, fetchCatalog, fetchTokenRates, fetchUsage } from "./src/api.mj
 import { chatFetch } from "./src/chat.mjs"
 import { staticModels, liveModels } from "./src/models.mjs"
 import { checkMaasAccess, watchMaasAccess, probeMaasAccess } from "./src/maas.mjs"
+import { readOfficeAceAccounts, pickOfficeAceCredential, officeAceAuthFile } from "./src/accounts.mjs"
 
 const PROVIDER = "officeace"
 const PROVIDER_NAME = "OfficeAce"
@@ -133,6 +134,12 @@ function noteMaasPending(cred) {
   maasPending.set(key, cred)
 }
 
+/** 凭据是否到了该续期的时候（与 magpie 的 refreshLead 同一个判据）。 */
+function needsRefresh(cred) {
+  const at = Date.parse(cred?.expiresAt ?? "")
+  return Number.isFinite(at) && at - Date.now() <= EXPIRY_LEAD_MS
+}
+
 /** 最近一次见到的、还没接 MaaS 的那份凭据（没有就是 null）。 */
 function latestMaasPending() {
   const all = [...maasPending.values()]
@@ -157,6 +164,8 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
   // 只有新代码用得上：允许测试注入 fetch（其余调用点仍用全局 fetch，与旧版一致）
   const maasFetcher = typeof options?.fetch === "function" ? options.fetch : (...args) => fetch(...args)
   const maasProbeMs = Number.isFinite(options?.maasProbeMs) && options.maasProbeMs > 0 ? options.maasProbeMs : DEFAULT_MAAS_PROBE_MS
+  // magpie 保存账号的那个文件（只读；见 src/accounts.mjs）。测试可注入。
+  const authFile = officeAceAuthFile({ file: options?.authFile })
   // 测试注入：真实的 beginLogin 会去 CLAW 注册 state 并后台轮询 10 分钟
   const startLogin = typeof options?.beginLogin === "function" ? options.beginLogin : beginLogin
 
@@ -209,7 +218,22 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
           type: "oauth",
           label: "华为云账号",
           async authorize() {
-            const pending = latestMaasPending()
+            // 已保存的登录态：内存里那份（刚读过额度，最新）优先；没有就从磁盘
+            // 读 magpie 存下的账号 —— magpie 一重启内存就是空的，只看内存会把
+            // 「明明有凭据」的用户送去登录页。
+            let pending = latestMaasPending()
+            if (!pending) pending = pickOfficeAceCredential(readOfficeAceAccounts({ file: authFile }))
+
+            // 凭据过期/临期：先用它的 refresh_token 续一次（不续的话探测必然 401，
+            // 用户又得重新登录一次）
+            if (pending && needsRefresh(pending) && pending.refreshToken) {
+              try {
+                pending = (await refreshOnce(pending)) ?? pending
+              } catch {
+                /* 续不动就用旧的去探，探不动自然会走登录 */
+              }
+            }
+
             const probed = pending
               ? await probeMaasAccess(pending, maasFetcher, { timeoutMs: maasProbeMs })
               : { route: "dead", credential: null }
@@ -575,4 +599,8 @@ export const _internal = {
   checkMaasAccess,
   watchMaasAccess,
   probeMaasAccess,
+  needsRefresh,
+  readOfficeAceAccounts,
+  pickOfficeAceCredential,
+  officeAceAuthFile,
 }
