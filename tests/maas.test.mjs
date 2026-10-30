@@ -441,15 +441,23 @@ test("账号文件读取：只认 officeace，读不坏、只读", async () => {
 test("账号文件路径：MAGPIE_OFFICEACE_AUTH_FILE / XDG_CONFIG_HOME / 默认", () => {
   const saved = { a: process.env.MAGPIE_OFFICEACE_AUTH_FILE, x: process.env.XDG_CONFIG_HOME }
   try {
-    process.env.MAGPIE_OFFICEACE_AUTH_FILE = "D:\\tmp\\explicit.json"
-    assert.equal(_internal.officeAceAuthFile(), "D:\\tmp\\explicit.json")
+    // 显式指定（便携版/测试用）：原样返回
+    const explicit = path.join(os.tmpdir(), "explicit-auth.json")
+    process.env.MAGPIE_OFFICEACE_AUTH_FILE = explicit
+    assert.equal(_internal.officeAceAuthFile(), explicit)
     delete process.env.MAGPIE_OFFICEACE_AUTH_FILE
 
-    process.env.XDG_CONFIG_HOME = "D:\\xdg"
-    assert.equal(_internal.officeAceAuthFile(), path.join("D:\\xdg", "magpie", "plugin-auth.json"))
+    // XDG_CONFIG_HOME（绝对路径才算数，与 magpie 的 rooted() 判据一致）
+    const xdg = path.join(os.tmpdir(), "xdg-root")
+    process.env.XDG_CONFIG_HOME = xdg
+    assert.equal(_internal.officeAceAuthFile(), path.join(xdg, "magpie", "plugin-auth.json"))
+
+    // 相对路径不算数 → 退回 ~/.config/magpie
+    process.env.XDG_CONFIG_HOME = "relative-dir"
+    assert.equal(_internal.officeAceAuthFile(), path.join(os.homedir(), ".config", "magpie", "plugin-auth.json"))
     delete process.env.XDG_CONFIG_HOME
 
-    assert.match(_internal.officeAceAuthFile(), /magpie[\\/]plugin-auth\.json$/)
+    assert.ok(_internal.officeAceAuthFile().endsWith(path.join("magpie", "plugin-auth.json")), "默认落在 magpie 的配置目录里")
   } finally {
     if (saved.a === undefined) delete process.env.MAGPIE_OFFICEACE_AUTH_FILE
     else process.env.MAGPIE_OFFICEACE_AUTH_FILE = saved.a
