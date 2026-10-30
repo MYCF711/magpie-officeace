@@ -9,6 +9,8 @@ import assert from "node:assert/strict"
 import { OfficeAceAuthPlugin } from "../index.mjs"
 import { credentialOf, toStored, expiryMs } from "../src/credential.mjs"
 
+const noModelInfo = async () => new Response(JSON.stringify({ error_code: "APIGW.0301" }), { status: 401 })
+
 const sts = {
   access: "HSTAOZ3JN3WWYF3L",
   secret: "9hefA4eK2KTT",
@@ -92,7 +94,7 @@ test("expiryMs：解析不了时保守给 1 小时后（不改旧语义）", () 
 })
 
 test("loader：STS-only 回一个说清原因的 400，不发空 Basic 头", async () => {
-  const plugin = await OfficeAceAuthPlugin({})
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: noModelInfo })
   const loader = await plugin.auth.loader(async () => record(sts), {})
   assert.equal(loader.baseURL, undefined, "不该给 baseURL —— 请求不出网关")
   assert.equal(typeof loader.fetch, "function")
@@ -104,27 +106,27 @@ test("loader：STS-only 回一个说清原因的 400，不发空 Basic 头", asy
 })
 
 test("loader：完全未登录时仍不接管（让 magpie 说「未登录」）", async () => {
-  const plugin = await OfficeAceAuthPlugin({})
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: noModelInfo })
   const loader = await plugin.auth.loader(async () => null, {})
   assert.deepEqual(loader, {})
 })
 
 test("loader：完整凭据照旧接管", async () => {
-  const plugin = await OfficeAceAuthPlugin({})
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: noModelInfo })
   const loader = await plugin.auth.loader(async () => record(full), {})
   assert.equal(loader.baseURL, "")
   assert.equal(typeof loader.fetch, "function")
 })
 
 test("models：STS-only 回退静态表", async () => {
-  const plugin = await OfficeAceAuthPlugin({})
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: noModelInfo })
   const models = await plugin.provider.models({}, { auth: record(sts) })
   assert.equal(typeof models, "object")
   assert.ok(Object.keys(models).length > 0, "静态表不能是空的")
 })
 
 test("models：无凭据也回退静态表", async () => {
-  const plugin = await OfficeAceAuthPlugin({})
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: noModelInfo })
   const models = await plugin.provider.models({}, { auth: null })
   assert.equal(typeof models, "object")
   assert.ok(Object.keys(models).length > 0)
