@@ -82,13 +82,20 @@ magpie 每天调一次 `POST /v1/subscription/bonus/claim`，领当日签到积�
 ```
 拿插件里已保存的登录态打一次 MaaS 侧接口（只读 GET /v1/claw/client-permission-validate）
 ├─ 已经开通        → 打开控制台给你用，本窗口直接完成（不轮询）
-├─ 没开通          → 打开 AgentArts 控制台，用同一份凭据每 5 秒检测一次，最长 3 分钟
+├─ 没开通          → 打开 MaaS 控制台（ModelArts），用同一份凭据每 5 秒检测一次，最长 3 分钟
 │                     检测到 model_auth_info 就合并进同一份记录回写 → magpie 重读额度，标记消失
 ├─ 读不通（网络）  → 按「没开通」处理（控制台可能仍是好的）
 └─ 凭据被拒(401/403) / 还没有登录态 → 走华为云 OAuth 登录；登录成功后标记仍在，再点一次就会带你到控制台
 ```
 
-**这件事插件做不到，所以说明里也不承诺**：控制台是**浏览器 cookie 会话**（`J_SESSION_ID`），插件的 OAuth 凭据是 API 凭证 —— 华为云**没有**「拿 access_token 换控制台 session」的公开接口（控制台免登只有账号级配置的 SAML/OIDC 联邦认证这一条路，要管理员在账号里配 IdP）。所以打开控制台后如果要求登录，用**同一个华为云账号**登录一下即可；插件不会假装能替你登进去。
+**开通本身只能你在控制台点，插件不能替你做**（已查证，见下）：控制台是**浏览器 cookie 会话**（`J_SESSION_ID`），插件的 OAuth 凭据是 API 凭证 —— 华为云**没有**「拿 access_token 换控制台 session」的公开接口（控制台免登只有账号级配置的 SAML/OIDC 联邦认证这一条路，要管理员在账号里配 IdP）。所以打开控制台后如果要求登录，用**同一个华为云账号**登录一下即可；插件不会假装能替你登进去。
+
+**为什么开通不能全自动**（2026-10-31 查证）：
+
+- **开通预置服务**（模型推理 → 在线推理 → 预置服务 → 开通服务）是**控制台的计费授权动作**，华为云没有对应的公开 OpenAPI（MaaS 的 API 概览里只有自定义接入点、调用统计、API Key 管理，没有「开通预置服务」）。
+- **创建 API Key 有 OpenAPI**（`POST /v2/{project_id}/maas/api-auth/api-keys`，需 `X-Auth-Token`，权限 `modelarts:apiKey:create`），但那是 **IAM token**，不是我们手里的 STS 临时凭据；而且**把 Key 绑给 OfficeAce 也没有公开接口** —— OfficeAce 客户端是走它自己后端（`/api/maas-subscribe-models`）写进本地配置的。
+- 插件手里的 `modelAppKey` 是 CLAW 的 `client-permission-validate` 下发的（`src/login.mjs:130`、`src/maas.mjs:60`），**只读**：开通前后它自己会出现或消失，插件无法反向创建。
+- 结论：**插件能做的是「检测 + 把你送到对的地方」**，做不到「用 STS 凭据直接开通」。
 
 已知边界：
 
