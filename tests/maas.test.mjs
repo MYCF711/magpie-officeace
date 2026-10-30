@@ -8,7 +8,23 @@
 //      带 AgentArts 控制台入口（旧包没有可改的登录落地页，说明文字是唯一入口）
 import test from "node:test"
 import assert from "node:assert/strict"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { OfficeAceAuthPlugin, _internal } from "../index.mjs"
+
+/** 一个空的临时目录 —— 测试永远不要读本机真的 plugin-auth.json。 */
+function tempAuthFile(name = "plugin-auth.json") {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "officeace-auth-"))
+  return path.join(dir, name)
+}
+
+/** 写一份 magpie 形状的账号文件（就绪记录：{type, access, refresh, expires, accountId}）。 */
+function writeAuthFile(file, entries) {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify(entries, null, 2))
+  return file
+}
 
 const stsOnly = {
   access: "HSTAOZ3JN3WWYF3L",
@@ -39,7 +55,7 @@ async function withSubscriptionFetch(fn) {
 }
 
 test("usage：没有 modelAppKey 的账号标「未接入 MaaS」并带 signIn expired", async () => {
-  const plugin = await OfficeAceAuthPlugin({})
+  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile() })
   const out = await withSubscriptionFetch(() => plugin.auth.usage(async () => record(stsOnly), {}))
   assert.equal(out.plan, "未接入 MaaS")
   assert.equal(out.signIn, "expired")
@@ -47,7 +63,7 @@ test("usage：没有 modelAppKey 的账号标「未接入 MaaS」并带 signIn e
 })
 
 test("usage：有 modelAppKey 的账号两个字段都不给", async () => {
-  const plugin = await OfficeAceAuthPlugin({})
+  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile() })
   const out = await withSubscriptionFetch(() => plugin.auth.usage(async () => record(withMaas), {}))
   assert.equal(out.plan, "OfficeAce")
   assert.equal("signIn" in out, false)
@@ -60,6 +76,11 @@ const loginStub = (url = "https://auth.huaweicloud.com/authui/login.html?service
   url,
   result: new Promise(() => {}),
 })
+
+/** 一个「一旦被调用就炸」的登录替身：用来断言「这条路上不该出现华为云登录」。 */
+const noLogin = () => async () => {
+  throw new Error("should not start the Huawei Cloud sign-in")
+}
 
 /** 只读探测接口的替身：按调用序号决定「还没开通 / 已开通 / 被拒」。 */
 function maasFetch(grants, { status = 200 } = {}) {
@@ -110,7 +131,7 @@ test("说明文案：控制台那条如实写「要登录就用同一账号」�
 })
 
 test("只有一个登录入口（用户不用选）", async () => {
-  const plugin = await OfficeAceAuthPlugin({})
+  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile() })
   assert.equal(plugin.auth.methods.length, 1)
   assert.equal(plugin.auth.methods[0].type, "oauth")
   assert.equal(plugin.auth.methods[0].label, "华为云账号")
@@ -120,7 +141,7 @@ test("单入口 · 凭据已能开通：直接完成，不轮询", async () => {
   _internal.maasPending.clear()
   _internal.noteMaasPending(pendingCred())
   const { fetcher, calls } = maasFetch(true)
-  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin: loginStub() })
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin: loginStub(), authFile: tempAuthFile() })
   const a = await plugin.auth.methods[0].authorize()
   assert.equal(a.url, _internal.MAAS_CONSOLE_URL, "顺带把控制台开给用户")
   assert.equal(calls.length, 1, "只探一次")
@@ -135,7 +156,7 @@ test("单入口 · 没开通：开控制台 + 轮询，回写同一份凭据", a
   _internal.maasPending.clear()
   _internal.noteMaasPending(pendingCred())
   const { fetcher, calls } = maasFetch((n) => n >= 3)
-  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin: loginStub(), maasWatchMs: 3000, maasWatchIntervalMs: 5 })
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin: loginStub(), authFile: tempAuthFile(), maasWatchMs: 3000, maasWatchIntervalMs: 5 })
   const a = await plugin.auth.methods[0].authorize()
   assert.equal(a.url, _internal.MAAS_CONSOLE_URL, "打开控制台，不是华为云登录")
   assert.notEqual(a.opened, true, "不自己开页面：要让 magpie 开")
@@ -155,7 +176,7 @@ test("单入口 · 等不到开通：如实报错，并指路再点一次", asyn
   _internal.maasPending.clear()
   _internal.noteMaasPending(pendingCred())
   const { fetcher } = maasFetch(false)
-  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin: loginStub(), maasWatchMs: 40, maasWatchIntervalMs: 10 })
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin: loginStub(), authFile: tempAuthFile(), maasWatchMs: 40, maasWatchIntervalMs: 10 })
   const a = await plugin.auth.methods[0].authorize()
   const out = await a.callback()
   assert.equal(out.type, "failed")
@@ -169,7 +190,7 @@ test("单入口 · 凭据被拒（401）：走华为云登录，不开控制台"
   _internal.maasPending.clear()
   _internal.noteMaasPending(pendingCred())
   const { fetcher } = maasFetch(false, { status: 401 })
-  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin: loginStub("https://auth.huaweicloud.com/authui/login.html?service=x") })
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin: loginStub("https://auth.huaweicloud.com/authui/login.html?service=x"), authFile: tempAuthFile() })
   const a = await plugin.auth.methods[0].authorize()
   assert.match(a.url, /^https:\/\/auth\.huaweicloud\.com\//, "凭据不能用 → 真正的登录")
   assert.ok(a.instructions.includes("华为云登录"))
@@ -179,7 +200,7 @@ test("单入口 · 凭据被拒（401）：走华为云登录，不开控制台"
 test("单入口 · 没有任何登录态：走华为云登录", async () => {
   _internal.maasPending.clear()
   const { fetcher, calls } = maasFetch(false)
-  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin: loginStub("https://auth.huaweicloud.com/authui/login.html?service=y") })
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin: loginStub("https://auth.huaweicloud.com/authui/login.html?service=y"), authFile: tempAuthFile() })
   const a = await plugin.auth.methods[0].authorize()
   assert.match(a.url, /^https:\/\/auth\.huaweicloud\.com\//)
   assert.equal(calls.length, 0, "没有凭据就不用探")
@@ -202,7 +223,7 @@ test("单入口 · 探测很慢也不会卡住 authorize（铁律：立刻返回
       })
     })
   try {
-    const plugin = await OfficeAceAuthPlugin({}, { maasProbeMs: 80, maasWatchMs: 60, maasWatchIntervalMs: 10 })
+    const plugin = await OfficeAceAuthPlugin({}, { maasProbeMs: 80, maasWatchMs: 60, maasWatchIntervalMs: 10, authFile: tempAuthFile() })
     const t0 = Date.now()
     const a = await plugin.auth.methods[0].authorize()
     const took = Date.now() - t0
@@ -217,7 +238,7 @@ test("单入口 · 探测很慢也不会卡住 authorize（铁律：立刻返回
 
 test("usage 记住没接 MaaS 的账号，接上了就忘掉；取的是最近那份", async () => {
   _internal.maasPending.clear()
-  const plugin = await OfficeAceAuthPlugin({})
+  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile() })
   const body = JSON.stringify({ skus: [], bonus_skus: [] })
   const original = globalThis.fetch
   globalThis.fetch = async () => new Response(body, { status: 200 })
@@ -234,7 +255,7 @@ test("usage 记住没接 MaaS 的账号，接上了就忘掉；取的是最近�
 })
 
 test("loader：MaaSNotLinked 400 文案保持两条官方路径与文档链接", async () => {
-  const plugin = await OfficeAceAuthPlugin({})
+  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile() })
   const loader = await plugin.auth.loader(async () => record(stsOnly), {})
   const res = await loader.fetch("https://api.modelarts-maas.com/v2/chat/completions", { method: "POST" })
   assert.equal(res.status, 400)
@@ -243,4 +264,196 @@ test("loader：MaaSNotLinked 400 文案保持两条官方路径与文档链接",
   assert.equal(body.error.type, "officeace_maas_not_linked")
   assert.match(body.error.message, /两条路都行/)
   assert.match(body.error.message, /officeace_02_0018\.html/)
+})
+
+// ---- 「复用已保存的凭据」：内存为空时从磁盘读 ------------------------------
+
+/** magpie 形状的一条 officeace 记录（含续期要用的 DPoP 私钥）。 */
+async function storedOfficeAceRecord(overrides = {}) {
+  const { privateJwk } = await import("../src/crypto.mjs").then((m) => m.generateDpopKeyPair())
+  const cred = {
+    access: "AK-DISK",
+    secret: "SK-DISK",
+    securityToken: "ST-DISK",
+    projectId: "",
+    expiresAt: "2031-01-01T00:00:00Z",
+    refreshToken: "RT-DISK",
+    dpopPrivateJwk: privateJwk,
+    accountId: "01a1642ad2ae7f93bf6387ad2fc5f09e",
+    user_phone: "189****8051",
+    ...overrides,
+  }
+  return {
+    type: "oauth",
+    access: JSON.stringify(cred),
+    refresh: cred.refreshToken,
+    expires: Date.parse("2031-01-01T00:00:00Z"),
+    accountId: cred.accountId,
+    uid: cred.accountId,
+  }
+}
+
+test("重启后内存为空 · 磁盘有凭据：复用凭据去探测，不跳登录", async () => {
+  _internal.maasPending.clear() // 模拟 magpie 刚重启：内存里什么都没有
+  const authFile = writeAuthFile(tempAuthFile(), { officeace: await storedOfficeAceRecord() })
+  const { fetcher, calls } = maasFetch(true)
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin: noLogin(), authFile })
+  const a = await plugin.auth.methods[0].authorize()
+  assert.equal(a.url, _internal.MAAS_CONSOLE_URL, "从磁盘读到凭据 → 不该跳华为云登录")
+  assert.equal(calls.length, 1, "探了一次")
+  const out = await a.callback()
+  assert.equal(out.type, "success")
+  assert.equal(JSON.parse(out.access).modelAppKey, "app-key")
+})
+
+test("重启后内存为空 · 磁盘凭据没开通：开控制台 + 轮询", async () => {
+  _internal.maasPending.clear()
+  const authFile = writeAuthFile(tempAuthFile(), { officeace: await storedOfficeAceRecord() })
+  const { fetcher } = maasFetch((n) => n >= 2)
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin: noLogin(), authFile, maasWatchMs: 3000, maasWatchIntervalMs: 5 })
+  const a = await plugin.auth.methods[0].authorize()
+  assert.equal(a.url, _internal.MAAS_CONSOLE_URL)
+  const out = await a.callback()
+  assert.equal(out.type, "success")
+  assert.equal(JSON.parse(out.access).variant, undefined)
+})
+
+test("磁盘凭据真的被拒（401）：才走华为云登录", async () => {
+  _internal.maasPending.clear()
+  const authFile = writeAuthFile(tempAuthFile(), { officeace: await storedOfficeAceRecord() })
+  const { fetcher } = maasFetch(false, { status: 401 })
+  let started = 0
+  const beginLogin = async () => {
+    started += 1
+    return { url: "https://auth.huaweicloud.com/authui/login.html?service=disk401", result: new Promise(() => {}) }
+  }
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin, authFile })
+  const a = await plugin.auth.methods[0].authorize()
+  assert.match(a.url, /^https:\/\/auth\.huaweicloud\.com\//)
+  assert.equal(started, 1)
+})
+
+test("磁盘上一个 officeace 账号都没有：才走华为云登录", async () => {
+  _internal.maasPending.clear()
+  // 文件里只有别的插件（codearts）的账号
+  const authFile = writeAuthFile(tempAuthFile(), { codearts: { type: "oauth", refresh: "R", access: "{}", expires: 1 } })
+  const { fetcher, calls } = maasFetch(false)
+  let started = 0
+  const beginLogin = async () => {
+    started += 1
+    return { url: "https://auth.huaweicloud.com/authui/login.html?service=none", result: new Promise(() => {}) }
+  }
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin, authFile })
+  const a = await plugin.auth.methods[0].authorize()
+  assert.match(a.url, /^https:\/\/auth\.huaweicloud\.com\//)
+  assert.equal(calls.length, 0, "没有凭据就不用探")
+  assert.equal(started, 1)
+})
+
+test("内存里那份优先（它是刚读过额度的最新凭据）", async () => {
+  _internal.maasPending.clear()
+  _internal.noteMaasPending(pendingCred({ securityToken: "ST-MEM" }))
+  const authFile = writeAuthFile(tempAuthFile(), { officeace: await storedOfficeAceRecord() })
+  const seen = []
+  const fetcher = async (url, init) => {
+    if (String(url).includes("/v1/claw/client-permission-validate")) {
+      seen.push(init?.headers?.["x-security-token"])
+      return new Response(JSON.stringify({ subscription: { model_info: { model_auth_info: { model_app_key: "k", model_app_secret: "s" } } } }), { status: 200 })
+    }
+    return new Response("{}", { status: 200 })
+  }
+  const plugin = await OfficeAceAuthPlugin({}, { fetch: fetcher, beginLogin: noLogin(), authFile })
+  await plugin.auth.methods[0].authorize()
+  assert.deepEqual(seen, ["ST-MEM"], "用的是内存里那份，不是磁盘上的 ST-DISK")
+  _internal.maasPending.clear()
+})
+
+test("磁盘凭据过期：先用 refresh_token 续一次，再探（不要求重新登录）", async () => {
+  _internal.maasPending.clear()
+  const record = await storedOfficeAceRecord({ expiresAt: "2026-01-01T00:00:00Z", refreshToken: "RT-OLD", access: "AK-OLD", securityToken: "ST-OLD" })
+  const authFile = writeAuthFile(tempAuthFile(), { officeace: { ...record, refresh: "RT-OLD" } })
+
+  const tokenCalls = []
+  const sts = async (url, init = {}) => {
+    if (String(url).includes("/v1/oauth2/tokens")) {
+      tokenCalls.push(String(init.body ?? ""))
+      return new Response(
+        JSON.stringify({
+          credentials: { access_key_id: "AK-NEW", secret_access_key: "SK-NEW", security_token: "ST-NEW", expiration: "2031-01-01T00:00:00Z" },
+          refresh_token: "RT-NEW",
+        }),
+        { status: 200 },
+      )
+    }
+    if (String(url).includes("/v1/claw/client-permission-validate")) {
+      const st = init?.headers?.["x-security-token"]
+      const granted = st === "ST-NEW"
+      return new Response(JSON.stringify({ subscription: { model_info: granted ? { model_auth_info: { model_app_key: "k", model_app_secret: "s" } } : {} } }), { status: 200 })
+    }
+    return new Response("{}", { status: 200 })
+  }
+
+  const original = globalThis.fetch
+  globalThis.fetch = sts // refreshOnce 走全局 fetch
+  try {
+    const plugin = await OfficeAceAuthPlugin({}, { fetch: sts, beginLogin: noLogin(), authFile })
+    const a = await plugin.auth.methods[0].authorize()
+    assert.equal(tokenCalls.length, 1, "续了一次")
+    assert.equal(a.url, _internal.MAAS_CONSOLE_URL, "续期后探测成功 → 控制台，不是登录页")
+    const out = await a.callback()
+    assert.equal(out.type, "success")
+    assert.equal(JSON.parse(out.access).securityToken, "ST-NEW", "回写的是续期后的凭据")
+    assert.equal(JSON.parse(out.access).modelAppKey, "k")
+  } finally {
+    globalThis.fetch = original
+    _internal.maasPending.clear()
+  }
+})
+
+test("账号文件读取：只认 officeace，读不坏、只读", async () => {
+  const file = writeAuthFile(tempAuthFile(), {
+    officeace: await storedOfficeAceRecord(),
+    "officeace#abc123": await storedOfficeAceRecord({ access: "AK-2", securityToken: "ST-2" }),
+    codearts: { type: "oauth", refresh: "R", access: "{}" },
+    "gemini-cli": { type: "api", key: "x" },
+  })
+  const before = fs.readFileSync(file, "utf8")
+  const beforeStat = fs.statSync(file)
+
+  const accounts = _internal.readOfficeAceAccounts({ file })
+  assert.deepEqual(accounts.map((a) => a.key).sort(), ["officeace", "officeace#abc123"])
+  assert.equal(accounts[0].cred.access, "AK-DISK")
+  // 优先挑「还没接 MaaS」的那个
+  assert.equal(_internal.pickOfficeAceCredential(accounts).securityToken, "ST-DISK")
+
+  // 只读：内容与 mtime 都没变
+  assert.equal(fs.readFileSync(file, "utf8"), before)
+  assert.equal(fs.statSync(file).mtimeMs, beforeStat.mtimeMs)
+
+  // 读不到 / 坏文件 / 空对象：都是空数组，从不抛
+  assert.deepEqual(_internal.readOfficeAceAccounts({ file: path.join(path.dirname(file), "nope.json") }), [])
+  fs.writeFileSync(file, "{ not json")
+  assert.deepEqual(_internal.readOfficeAceAccounts({ file }), [])
+  fs.writeFileSync(file, "[]")
+  assert.deepEqual(_internal.readOfficeAceAccounts({ file }), [])
+})
+
+test("账号文件路径：MAGPIE_OFFICEACE_AUTH_FILE / XDG_CONFIG_HOME / 默认", () => {
+  const saved = { a: process.env.MAGPIE_OFFICEACE_AUTH_FILE, x: process.env.XDG_CONFIG_HOME }
+  try {
+    process.env.MAGPIE_OFFICEACE_AUTH_FILE = "D:\\tmp\\explicit.json"
+    assert.equal(_internal.officeAceAuthFile(), "D:\\tmp\\explicit.json")
+    delete process.env.MAGPIE_OFFICEACE_AUTH_FILE
+
+    process.env.XDG_CONFIG_HOME = "D:\\xdg"
+    assert.equal(_internal.officeAceAuthFile(), path.join("D:\\xdg", "magpie", "plugin-auth.json"))
+    delete process.env.XDG_CONFIG_HOME
+
+    assert.match(_internal.officeAceAuthFile(), /magpie[\\/]plugin-auth\.json$/)
+  } finally {
+    if (saved.a === undefined) delete process.env.MAGPIE_OFFICEACE_AUTH_FILE
+    else process.env.MAGPIE_OFFICEACE_AUTH_FILE = saved.a
+    if (saved.x === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = saved.x
+  }
 })
