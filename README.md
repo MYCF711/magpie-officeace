@@ -90,6 +90,26 @@ magpie 每天调一次 `POST /v1/subscription/bonus/claim`，领当日签到积�
 
 **开通本身只能你在控制台点，插件不能替你做**（已查证，见下）：控制台是**浏览器 cookie 会话**（`J_SESSION_ID`），插件的 OAuth 凭据是 API 凭证 —— 华为云**没有**「拿 access_token 换控制台 session」的公开接口（控制台免登只有账号级配置的 SAML/OIDC 联邦认证这一条路，要管理员在账号里配 IdP）。所以打开控制台后如果要求登录，用**同一个华为云账号**登录一下即可；插件不会假装能替你登进去。
 
+**受控浏览器（把华为云登录态留下来）**：插件不再把控制台链接丢给系统浏览器，而是自己起一个**受控 Chromium**
+（Chrome / Edge / Brave，持久 `--user-data-dir`，每个账号一个 profile）：
+
+1. 第一次：窗口里显示华为云登录页 → 你在**这个窗口**里登录一次；
+2. 登录完成后插件用 CDP `Storage.getCookies` 抓 `.huaweicloud.com` 的 cookie，存到
+   `~/.cache/magpie/officeace-huawei-<account>.json`（只含华为云域、0600）；
+3. 以后打开控制台：同一个账号用同一个 profile，插件先把保存的 cookie 注入 page target
+   （`Network.setCookie`）再导航 —— 控制台直接进，不跳 `auth.huaweicloud.com`。
+
+拿不到浏览器（或设了 `MAGPIE_OFFICEACE_NO_BROWSER=1`）→ 回退成原来的「系统浏览器 + 控制台链接」。
+
+**为什么不用 token 换控制台会话**（实测 2026-10-31）：
+
+- `POST /v3.0/OS-AUTH/securitytoken/logintokens`（官方「token 方式创建云服务登录地址」第②步）拿我们的
+  `securityToken` 直接调 → **401 `The security token is invalid.`**（`iam.myhuaweicloud.com` / `iam.cn-north-4` /
+  `iam.cn-southwest-2` 都一样）—— AgentArts 的 STS token 不是 IAM 的 security token，这条桥走不通。
+- `POST /v3.0/OS-AUTH/id-token/tokens`（OIDC 联邦）用 `plugin-auth.json` 里的 token 调 → **400 `IAM.0007 Request
+  parameter 'idp id' is invalid`**：IAM 只认账号里配置过的 IdP 签发的 ID token；我们的 OAuth 客户端不是那个 IdP。
+- 结论：**只能走浏览器 cookie**，所以才有上面的受控浏览器方案。
+
 **为什么开通不能全自动**（2026-10-31 查证）：
 
 - **开通预置服务**（模型推理 → 在线推理 → 预置服务 → 开通服务）是**控制台的计费授权动作**，华为云没有对应的公开 OpenAPI（MaaS 的 API 概览里只有自定义接入点、调用统计、API Key 管理，没有「开通预置服务」）。
@@ -103,6 +123,9 @@ magpie 每天调一次 `POST /v1/subscription/bonus/claim`，领当日签到积�
 - **已经接好 MaaS 的账号**：探测会说「已经开通」，本窗口直接完成。
 - **续期与放弃**：只有在凭据临期时才会续一次；万一续完你就关掉了窗口，那份新凭据来不及写回 magpie（插件不写账号文件），下次可能要求重新登录一次。
 - 插件选项：`maasProbeMs`（默认 1200，`authorize()` 里那次探测的超时）、`maasWatchMs`（默认 180000）、`maasWatchIntervalMs`（默认 5000）、`authFile`（账号文件位置，默认按上面的规则推导）。
+- **受控浏览器的已知边界**：cookie 是**会话 cookie**（`J_SESSION_ID` 通常没有过期时间），所以插件每次打开都会把
+  `~/.cache/magpie/officeace-huawei-<account>.json` 里的 cookie 重新注入；如果华为云在服务端把旧会话判失效，
+  窗口会回到登录页 —— 再登一次即可。受控窗口用 `--user-data-dir` 独立 profile，不碰你日常浏览器的登录态。
 
 ---
 

@@ -49,6 +49,7 @@ import { chatFetch } from "./src/chat.mjs"
 import { staticModels, liveModels } from "./src/models.mjs"
 import { checkMaasAccess, watchMaasAccess, probeMaasAccess } from "./src/maas.mjs"
 import { readOfficeAceAccounts, pickOfficeAceCredential, officeAceAuthFile } from "./src/accounts.mjs"
+import { openConsoleWindow, waitForLoginAndSave, loadSavedCookies, primeSession, closeWindow, CONSOLE_URL } from "./src/console-browser.mjs"
 
 const PROVIDER = "officeace"
 const PROVIDER_NAME = "OfficeAce"
@@ -85,6 +86,14 @@ const MAAS_OPEN_INSTRUCTIONS =
   "。开通后回到本窗口，插件会自己检测到并完成。" +
   "**控制台要求登录的话，用同一个华为云账号登一下** —— 控制台是浏览器 cookie 会话，插件手里的 STS 凭据没法替你登进去。" +
   "为什么不能全自动：华为云没有公开的「开通预置服务」API（那是控制台的计费授权动作），API Key 虽然有 OpenAPI，但把 Key 绑定给 OfficeAce 也没有公开接口。"
+
+/** 受控浏览器窗口那条路：说明「这个窗口会记住登录」。 */
+const MAAS_WINDOW_INSTRUCTIONS =
+  "已为你打开一个受控浏览器窗口（它会一直记住这个账号的华为云登录态）。" +
+  "如果窗口里显示华为云登录页，**在这个窗口里登录一次** —— 之后打开 MaaS 控制台就不会再要求登录。" +
+  "登录后按这三步开通：" +
+  MAAS_STEPS +
+  "。开通后回到本窗口，插件会自己检测到并完成。"
 
 /** 已经开通时（点了登录但账号其实是好的）：不需要用户做任何事。 */
 const MAAS_ALREADY_INSTRUCTIONS =
@@ -171,6 +180,10 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
   // 只有新代码用得上：允许测试注入 fetch（其余调用点仍用全局 fetch，与旧版一致）
   const maasFetcher = typeof options?.fetch === "function" ? options.fetch : (...args) => fetch(...args)
   const maasProbeMs = Number.isFinite(options?.maasProbeMs) && options.maasProbeMs > 0 ? options.maasProbeMs : DEFAULT_MAAS_PROBE_MS
+  // 受控浏览器（持久 profile）：默认真起一个 Chromium；测试可注入。
+  const openConsole = typeof options?.openConsole === "function" ? options.openConsole : openConsoleWindow
+  const waitConsoleLogin =
+    typeof options?.waitConsoleLogin === "function" ? options.waitConsoleLogin : waitForLoginAndSave
   // magpie 保存账号的那个文件（只读；见 src/accounts.mjs）。测试可注入。
   const authFile = officeAceAuthFile({ file: options?.authFile })
   // 测试注入：真实的 beginLogin 会去 CLAW 注册 state 并后台轮询 10 分钟
@@ -260,11 +273,36 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
             }
 
             // ①-b 凭据有效、MaaS 没开通（或这次读不通）：开控制台 + 轮询
+            //
+            // 优先用**受控 Chromium + 持久 profile**：第一次在这个窗口里登录一次，
+            // cookie 被保存下来；以后打开控制台直接进，不再跳华为云登录页。
+            // 浏览器起不来 → 回退成「系统浏览器 + 控制台链接」（不设 opened）。
             const use = probed.credential
             if ((route === "not-granted" || route === "unknown") && use) {
+              const accountKey = accountIdentityOf(use).id || use.accountId || "default"
+              const saved = loadSavedCookies(accountKey)
+              let win = null
+              try {
+                win = await openConsole({ accountKey, url: CONSOLE_URL })
+              } catch {
+                win = null
+              }
+              const opened = Boolean(win?.ok)
+              if (opened) {
+                // 后台：先把上次保存的 cookie 注入这个窗口（有的话）再导航到控制台，
+                // 然后等登录完成 → 抓 cookie 落盘。都不阻塞 authorize()。
+                const prime = typeof options?.primeConsoleSession === "function" ? options.primeConsoleSession : primeSession
+                Promise.resolve()
+                  .then(() => prime(win, { accountKey, url: CONSOLE_URL }))
+                  .then(() => waitConsoleLogin(win.port, accountKey, { timeoutMs: 5 * 60_000 }))
+                  .catch(() => {})
+              }
               return {
                 url: MAAS_CONSOLE_URL,
-                instructions: MAAS_OPEN_INSTRUCTIONS,
+                ...(opened ? { opened: true } : {}),
+                instructions: opened
+                  ? (saved ? "已用上次保存的华为云登录态打开 MaaS 控制台。" : "") + MAAS_WINDOW_INSTRUCTIONS
+                  : MAAS_OPEN_INSTRUCTIONS,
                 method: "auto",
                 async callback() {
                   const granted = await watchMaasAccess(use, {
@@ -282,6 +320,10 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
                         (route === "unknown" ? " 另外这一次没能读通华为云（可能是网络或凭据问题），如果一直读不通，请重新登录一次。" : "") +
                         " 额度与签到不受影响。",
                     }
+                  }
+                  // 开通成功：把受控窗口收掉（用户不用再管它）
+                  if (opened) {
+                    try { await closeWindow(win) } catch {}
                   }
                   return successOf(granted)
                 },
@@ -611,4 +653,8 @@ export const _internal = {
   readOfficeAceAccounts,
   pickOfficeAceCredential,
   officeAceAuthFile,
+  openConsoleWindow,
+  waitForLoginAndSave,
+  loadSavedCookies,
+  primeSession,
 }
