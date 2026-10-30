@@ -13,6 +13,9 @@ import os from "node:os"
 import path from "node:path"
 import { OfficeAceAuthPlugin, _internal } from "../index.mjs"
 
+// 测试里绝不真起浏览器（openConsole 会被插件调用）
+process.env.MAGPIE_OFFICEACE_NO_BROWSER = "1"
+
 /** 一个空的临时目录 —— 测试永远不要读本机真的 plugin-auth.json。 */
 function tempAuthFile(name = "plugin-auth.json") {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "officeace-auth-"))
@@ -235,6 +238,40 @@ test("单入口 · 探测很慢也不会卡住 authorize（铁律：立刻返回
     globalThis.fetch = original
     _internal.maasPending.clear()
   }
+})
+
+// ---- 受控浏览器（cookie 登录态）-------------------------------------------
+
+test("单入口 · 没开通时先起受控浏览器：opened=true，回退时不设 opened", async () => {
+  _internal.maasPending.clear()
+  _internal.noteMaasPending(pendingCred())
+  const { fetcher } = maasFetch(false)
+
+  const noWin = await OfficeAceAuthPlugin(
+    {},
+    { fetch: fetcher, beginLogin: noLogin(), authFile: tempAuthFile(), openConsole: async () => ({ ok: false }), waitConsoleLogin: async () => null },
+  )
+  const a1 = await noWin.auth.methods[0].authorize()
+  assert.equal(a1.opened, undefined, "没有受控浏览器 → 回退系统浏览器，不设 opened")
+  assert.equal(a1.url, _internal.MAAS_CONSOLE_URL)
+
+  let openedArgs = null
+  const withWin = await OfficeAceAuthPlugin(
+    {},
+    {
+      fetch: fetcher,
+      beginLogin: noLogin(),
+      authFile: tempAuthFile(),
+      openConsole: async (args) => { openedArgs = args; return { ok: true, port: 1234 } },
+      waitConsoleLogin: async () => null,
+    },
+  )
+  const a2 = await withWin.auth.methods[0].authorize()
+  assert.equal(a2.opened, true, "受控浏览器起来了 → 告诉 magpie 不要再开系统浏览器")
+  assert.equal(a2.url, _internal.MAAS_CONSOLE_URL)
+  assert.match(a2.instructions, /受控浏览器/)
+  assert.equal(openedArgs.accountKey, "01a1642ad2ae7f93bf6387ad2fc5f09e")
+  _internal.maasPending.clear()
 })
 
 test("usage 记住没接 MaaS 的账号，接上了就忘掉；取的是最近那份", async () => {
