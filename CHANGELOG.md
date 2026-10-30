@@ -1,3 +1,7 @@
+## 未发布
+
+- **修复：缺 modelAppKey 时不再误标「已退出登录」** —— 以前 `usage()` 在 `maasMissing` 时返回 `signIn: "expired"`，magpie 于是显示「已退出登录 — 请在此账号上选择重新登录」，但这些账号的 STS 凭据是好的（额度、签到正常），只是云端没下发 model_info（例如 181****6710 / 180****2361 / 187****5670）。现在只标 `plan: "未接入 MaaS"`，并说明「用这个账号打开一次 OfficeAce 客户端接入模型」；只有 refresh_token 真失效才要求重新登录。另：旧记录补全现在会对四个号逐个验证（181****0632 云端有 model_info → 自动恢复可用；其余三个云端确实没有，如实显示）
+
 ## 0.1.22 — 2026-10-31
 
 - **修复：老记录不再被误判「未接入 MaaS」** —— 旧版插件写的记录可能只有 STS、没有 `modelAppKey`（例如 181****0632），但云端 `GET /v1/claw/client-permission-validate` 其实已经返回了 `model_info.model_auth_info`（`modelgw-*.officeace...` 网关的 Basic 凭据）。现在 `usage()` / `loader()` / `models()` / chat 检测到缺字段会先向云端补一次（按账号缓存 6 小时），补到就直接用 —— **登录完就能用 deepseek-v4.1-flash 等模型，不需要去 MaaS 控制台创建 API Key**。实测：181****0632 的旧记录补全后 `usage → 个人体验版（3 个额度桶）`、`models → 7 个（含 deepseek-v4.1-flash）`

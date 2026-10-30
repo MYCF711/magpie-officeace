@@ -448,12 +448,11 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
                 JSON.stringify({
                   error: {
                     message:
-                      "OfficeAce 账号已登录，但还没有接入华为云 MaaS（凭据里没有 modelAppKey）。" +
-                      "两条路都行：\n" +
-                      "① OfficeAce 客户端：左侧「模型」→ 右上角「接入模型」→「接入华为云 MaaS 模型」→ 接入类型选「华为云 MaaS 按需计费」→ 填 MaaS 控制台创建的 API Key → 连通性测试 → 确认。\n" +
-                      "② AgentArts 控制台：管理中心 → 授权管理 →「模型」页签 →「批量开通模型」；再「鉴权管理」→ 在 MaaS 服务创建 API Key → 确定。\n" +
-                      "步骤：https://support.huaweicloud.com/usermanual-officeace/officeace_02_0018.html\n" +
-                      "额度与签到不受影响，已经可以正常使用。",
+                      "这个 OfficeAce 账号还没有模型网关信息（云端没有下发 modelAppKey）。" +
+                      "这不是登录失效 —— 额度与签到都正常。" +
+                      "可执行的做法：用这个账号打开一次 OfficeAce 客户端（左侧「模型」→ 右上角「接入模型」→「接入华为云 MaaS 模型」），" +
+                      "让云端给该账号下发模型网关信息；接入后回到 magpie 刷新即可。" +
+                      "步骤：https://support.huaweicloud.com/usermanual-officeace/officeace_02_0018.html",
                     type: "officeace_maas_not_linked",
                     code: "MaaSNotLinked",
                   },
@@ -512,9 +511,11 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
         // 旧记录先补 model_info —— 有模型网关就不用再标「未接入 MaaS」
         const cred = await hydratedCredential(stored, maasFetcher)
 
-        // 没接入 MaaS：卡片上用 plan 标明（只影响显示），并让 magpie 在这张
-        // 卡上给出「Sign in again」按钮（登录说明里带官方接入入口）。有
-        // modelAppKey 时两个都不给。
+        // 没有模型网关信息（modelAppKey）：卡片上用 plan 标明，只影响显示。
+        // ⚠ **不要**给 signIn: "expired" —— 那会让 magpie 显示「已退出登录 —
+        //   请重新登录」，但这些账号的 STS 凭据是好的（额度、签到都正常），
+        //   只是云端没下发 model_info。误标登录失效会把用户引去点「重新登录」，
+        //   而登录也解决不了。真需要重新登录时由 refresh 抛 signIn。
         const maasMissing = !cred.modelAppKey
         if (maasMissing) noteMaasPending(cred)
         else forgetMaasPending(cred)
@@ -522,7 +523,6 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
           const u = await fetchUsage(cred)
           return {
             plan: maasMissing ? MAAS_MISSING_PLAN : u.plan || PROVIDER_NAME,
-            ...(maasMissing ? { signIn: "expired" } : {}),
             ...(cred.user_phone || cred.accountId ? { user: cred.user_phone || cred.accountId } : {}),
             windows: u.windows,
           }
@@ -531,7 +531,7 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
           return {
             error: String(e?.message ?? e).slice(0, 300),
             windows: [],
-            ...(maasMissing ? { plan: MAAS_MISSING_PLAN, signIn: "expired" } : {}),
+            ...(maasMissing ? { plan: MAAS_MISSING_PLAN } : {}),
           }
         }
       },

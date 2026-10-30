@@ -61,12 +61,14 @@ async function withSubscriptionFetch(fn) {
   }
 }
 
-test("usage：没有 modelAppKey 的账号标「未接入 MaaS」并带 signIn expired", async () => {
+test("usage：没有 modelAppKey 的账号只标「未接入 MaaS」，不再误标登录失效", async () => {
+  _internal.modelInfoCache.clear()
   const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile(), fetch: noModelInfo })
   const out = await withSubscriptionFetch(() => plugin.auth.usage(async () => record(stsOnly), {}))
   assert.equal(out.plan, "未接入 MaaS")
-  assert.equal(out.signIn, "expired")
+  assert.equal("signIn" in out, false, "凭据是好的 —— 不能给 signIn: expired（会显示已退出登录）")
   assert.equal(out.error, undefined, "不能用 error：它会顶掉额度条")
+  assert.ok(Array.isArray(out.windows), "额度条照常显示")
 })
 
 test("usage：有 modelAppKey 的账号两个字段都不给", async () => {
@@ -358,7 +360,9 @@ test("loader：MaaSNotLinked 400 文案保持两条官方路径与文档链接",
   const body = await res.json()
   assert.equal(body.error.code, "MaaSNotLinked")
   assert.equal(body.error.type, "officeace_maas_not_linked")
-  assert.match(body.error.message, /两条路都行/)
+  assert.match(body.error.message, /还没有模型网关信息/)
+  assert.match(body.error.message, /不是登录失效/)
+  assert.match(body.error.message, /打开一次 OfficeAce 客户端/)
   assert.match(body.error.message, /officeace_02_0018\.html/)
 })
 

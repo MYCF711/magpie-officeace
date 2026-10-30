@@ -102,7 +102,7 @@ test("loader：STS-only 回一个说清原因的 400，不发空 Basic 头", asy
   assert.equal(res.status, 400)
   const body = await res.json()
   assert.equal(body.error.code, "MaaSNotLinked")
-  assert.match(body.error.message, /还没有接入华为云 MaaS/)
+  assert.match(body.error.message, /还没有模型网关信息/)
 })
 
 test("loader：完全未登录时仍不接管（让 magpie 说「未登录」）", async () => {
