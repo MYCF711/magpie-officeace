@@ -1,3 +1,7 @@
+## 未发布
+
+- **新增：自动接入模型（登录即得 MaaS key）** —— 登录/加载账号时如果 `client-permission-validate` 没有 `model_info`，插件自动调 `POST {CLAW_BASE}/v1/claw/client-subscription`（`x-subscription-type: v2`、V11 签名、body `{}`，与 OfficeAce 客户端登录后「开通」按钮同一个端点）拿到 `model_info.model_auth_info`，写回账号 —— 不需要打开 OfficeAce 客户端 UI。真机实测：181****6710 / 180****2361 / 187****5670 三个原本「未接入 MaaS」的账号自动接入后，`client-permission-validate` 均返回 model_app_key，网关 `/v2/models` 均 200（25 个模型）；插件 `usage()` 不再标「未接入 MaaS」，`models` 含 deepseek-v4.1-flash。
+
 ## 0.1.24 — 2026-10-31
 
 - **新增：复用 OfficeAce 客户端登录态** —— 点「重新登录」时先读 `~/.office-claw/session.cookie`（DPAPI，只读）拿 `oc_sid`，请求本地 `https://127.0.0.1:3003/api/islogin` 判断客户端当前登录的账号；若 magpie 里已有该 `account_id` 的凭据，就直接完成登录 —— **不打开任何登录页**。客户端没开/没登录/账号不匹配才回退华为云 OAuth。实测：客户端登录的是 181****0632，`authorize()` 约 2 秒返回 `opened:true`、`url:`、说明「已复用 OfficeAce 客户端的登录态（181****0632），无需再次登录」，callback 直接 success。另查：leveldb 的 `office-claw-sessionId` 是过期 Bearer（401），当前 `sessionId` 只能调本地 `/api/messages` 会话协议（非 OpenAI 兼容），聊天直连未采用。

@@ -84,6 +84,70 @@ export async function checkMaasAccess(cred, fetcher = fetch, opts = {}) {
 }
 
 /**
+ * 「接入模型」的自动完成：调 CLAW 的 client-subscription，让云端给这个账号
+ * 创建/补发 model_info（model_app_key + model_app_secret）。
+ *
+ * 这就是 OfficeAce 客户端「模型 → 接入模型 → 接入华为云 MaaS 模型」背后真正
+ * 让它生效的那一步（客户端源码 `channel-plugins/auth/officeace-huawei-oauth`
+ * 里的 `subscriptionClaw()`，同一个端点、同一个 V11 签名）。
+ *
+ * 2026-10-31 真机实测：181****6710 / 180****2361 / 187****5670 三个原本
+ * 「未接入 MaaS」的账号调用后都拿到了 model_info，网关 /v2/models 回 200（25 个模型）。
+ *
+ * ⚠ 这是**写操作**（订阅/开通），只在账号确实缺 model_info 时调用一次；
+ *   调用前必须已有有效 STS 凭据。
+ *
+ * @returns {Promise<{ok:true, granted:true, modelAppKey, modelAppSecret, maasBaseUrl, accountId?} |
+ *                   {ok:true, granted:false} |
+ *                   {ok:false, status:number, detail:string}>}
+ */
+export async function subscribeClientModelInfo(cred, fetcher = fetch, opts = {}) {
+  if (!cred?.access || !cred?.securityToken) return { ok: false, status: 0, detail: "凭据缺 access / securityToken" }
+  const timeoutMs = Number.isFinite(opts?.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : REQUEST_TIMEOUT_MS
+  const url = `${CLAW_BASE}/v1/claw/client-subscription`
+  const body = "{}"
+  const headers = {
+    "content-type": "application/json;charset=utf8",
+    "x-subscription-type": "v2",
+    "x-security-token": cred.securityToken,
+  }
+  if (cred.projectId) headers["x-project-id"] = cred.projectId
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(new Error(`请求超过 ${timeoutMs}ms 未响应`)), timeoutMs)
+  let r
+  try {
+    const signed = signHuaweiRequest("POST", url, headers, body, cred.access, cred.secret)
+    r = await fetcher(url, { method: "POST", headers: signed, body, signal: ac.signal })
+  } catch (e) {
+    return { ok: false, status: 0, detail: String(e?.message ?? e).slice(0, 200) }
+  } finally {
+    clearTimeout(timer)
+  }
+  const text = await r.text().catch(() => "")
+  if (!r.ok) return { ok: false, status: r.status, detail: text.trim().slice(0, 200) }
+  let j
+  try {
+    j = JSON.parse(text)
+  } catch {
+    return { ok: false, status: r.status, detail: "响应不是 JSON" }
+  }
+  const info = j?.model_info ?? j?.subscription?.model_info
+  const auth = info?.model_auth_info
+  const base = info?.model_api_url_base
+  if (typeof auth?.model_app_key !== "string" || typeof auth.model_app_secret !== "string") {
+    return { ok: true, granted: false }
+  }
+  return {
+    ok: true,
+    granted: true,
+    accountId: typeof j?.account_id === "string" ? j.account_id : undefined,
+    modelAppKey: auth.model_app_key,
+    modelAppSecret: auth.model_app_secret,
+    maasBaseUrl: typeof base === "string" && base.length > 0 ? base : "",
+  }
+}
+
+/**
  * 轮询到 MaaS 开通为止（只读）。
  *
  * @param {object} cred   已保存的凭据（STS 三元组 + refreshToken）
