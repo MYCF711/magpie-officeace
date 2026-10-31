@@ -1,3 +1,7 @@
+## 0.2.3 — 2026-10-31
+
+- **显示名改用 `magpie.name`，包名回到 slug**：`package.json.name` = `magpie-officeace`（bun 依赖键不再含空格/中文，`magpie plugin update` 不再报 `unrecognised dependency format`）；显示名放在 `magpie.name` = **华为云 HUAWEI**，并由 `magpie.summary` 说明双 provider。`magpie plugin list`/GUI 卡片按 `magpie.name` 显示；provider 名保持 `码道 CodeArts` / `果办 OfficeAce`，图标保持 0.2.2 的三级设置。
+
 ## 0.2.2 — 2026-10-31
 
 - **图标分三级**：插件卡片图标（`package.json` 的 `magpie.icon`）改为**华为云 HUAWEI** 的红色花瓣标志；`codearts` provider 用**码道 CodeArts** 的方形标志（客户端素材裁切，128×128）；`officeace` provider 保留原来的果办橙色图标。没有独立图标的 provider 会回退到插件级（华为云）。两处 data URI 都远小于 magpie 的 1 MB 上限。

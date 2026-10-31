@@ -185,10 +185,15 @@ cd ~/.config/magpie/plugins && ~/.cache/magpie/bun/1.4.4/magpie-bun.exe install
 
 ```bash
 magpie plugin list
-# 华为云 HUAWEI (OfficeAce 0.2.1)  on
-#   果办 OfficeAce (OfficeAce, 7 models)  signed in as <账号>
-#   码道 CodeArts (CodeArts, 10 models)  signed in as <账号>
+# github:MYCF711/magpie-officeace (magpie-officeace 0.2.3)  on
+#   码道 CodeArts (码道 CodeArts, 9 models)  signed in as <账号>
+#   果办 OfficeAce (果办 OfficeAce, 7 models)  signed in as <账号>
 ```
+
+⚠ **CLI 的插件标题是依赖键（slug），GUI 卡片才是中文显示名** —— 不是没生效：
+- GUI 插件卡片走 `shownName()`：社区 registry 名 → **`magpie.name`** → bun 依赖键 → spec，所以显示 **`华为云 HUAWEI`**；
+- CLI `magpie plugin list` 打印的是 `plugin.Name(spec)`（`internal/cli/plugins_cli.go`），即 bun 依赖键 **`magpie-officeace`**；
+- provider 名两边一致：`码道 CodeArts` / `果办 OfficeAce`。
 
 ⚠ 改了代码要 **bump `version` 再打包** —— 同一版本号重打，bun 会命中缓存（输出 `no changes`）。
 
