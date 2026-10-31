@@ -48,6 +48,7 @@ import { checkin, fetchCatalog, fetchTokenRates, fetchUsage } from "./src/api.mj
 import { chatFetch } from "./src/chat.mjs"
 import { staticModels, liveModels } from "./src/models.mjs"
 import { checkMaasAccess, watchMaasAccess, probeMaasAccess, subscribeClientModelInfo } from "./src/maas.mjs"
+import { claimTrialPackage, readSubscription, trialSkuState } from "./src/api.mjs"
 import { readOfficeAceAccounts, pickOfficeAceCredential, officeAceAuthFile } from "./src/accounts.mjs"
 import { probeClientLogin } from "./src/officeace-client.mjs"
 import { openConsoleWindow, waitForLoginAndSave, loadSavedCookies, primeSession, closeWindow, CONSOLE_URL } from "./src/console-browser.mjs"
@@ -197,6 +198,52 @@ async function hydratedCredential(cred, fetcher = (...args) => fetch(...args)) {
   return merged
 }
 
+/**
+ * 「个人体验版」自动补领。
+ *
+ * 触发条件（严格）：`GET /v1/subscription` 的 `skus` 里**没有** `officeace.personal.package.trial`，
+ * 或者那条已经过期（过期按「没有」处理 —— 这样第二个月还能再领一次）。
+ *
+ * 约束：
+ *   - 每个账号**每个进程只尝试一次**（成功/失败都缓存在内存，失败不重试）；
+ *   - 调之前**重读两次** skus 确认确实没有（防止并发/陈旧）；
+ *   - 调之后最多等 10 秒重读，确认 trial 出现；
+ *   - 只在 usage()/authorize() 里触发；loader()/chat 绝不调用。
+ */
+const trialClaimCache = new Map() // identity → Promise<{status,...}>
+
+async function ensureTrialPackage(cred, deps = {}) {
+  // 测试 / 特殊环境：不自动领
+  if (String(process.env.MAGPIE_OFFICEACE_NO_TRIAL_CLAIM || "") === "1") return { status: "disabled" }
+  if (!cred?.access || !cred?.securityToken) return { status: "skipped", message: "没有凭据" }
+  const id = accountIdentityOf(cred).id || cred.accountId || cred.refreshToken || "default"
+  const hit = trialClaimCache.get(id)
+  if (hit) return hit
+  const read = deps.readSubscription ?? readSubscription
+  const claim = deps.claimTrialPackage ?? claimTrialPackage
+  const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
+  const promise = (async () => {
+    let raw = await read(cred)
+    let st = trialSkuState(raw)
+    if (st.present && !st.expired) return { status: "present" }
+    // 下单前再读一次（防并发/陈旧）
+    raw = await read(cred)
+    st = trialSkuState(raw)
+    if (st.present && !st.expired) return { status: "present" }
+    const r = await claim(cred)
+    if (!r?.ok) return { status: "failed", message: r?.detail || `HTTP ${r?.status ?? 0}` }
+    // 下单后确认生效（免费单自动支付，实测约 5 秒）
+    for (let i = 0; i < 5; i++) {
+      await sleep(2000)
+      const after = trialSkuState(await read(cred))
+      if (after.present && !after.expired) return { status: "claimed", sku: after.sku }
+    }
+    return { status: "pending", orderId: r.orderId ?? null, cbcOrderId: r.cbcOrderId ?? null }
+  })().catch((e) => ({ status: "failed", message: String(e?.message ?? e).slice(0, 300) }))
+  trialClaimCache.set(id, promise)
+  return promise
+}
+
 /** 凭据是否到了该续期的时候（与 magpie 的 refreshLead 同一个判据）。 */
 function needsRefresh(cred) {
   const at = Date.parse(cred?.expiresAt ?? "")
@@ -227,6 +274,11 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
   // 只有新代码用得上：允许测试注入 fetch（其余调用点仍用全局 fetch，与旧版一致）
   const maasFetcher = typeof options?.fetch === "function" ? options.fetch : (...args) => fetch(...args)
   const maasProbeMs = Number.isFinite(options?.maasProbeMs) && options.maasProbeMs > 0 ? options.maasProbeMs : DEFAULT_MAAS_PROBE_MS
+  // 自动领取个人体验版：测试可注入/关闭（见 MAGPIE_OFFICEACE_NO_TRIAL_CLAIM）
+  const trialDeps = {
+    ...(typeof options?.readSubscription === "function" ? { readSubscription: options.readSubscription } : {}),
+    ...(typeof options?.claimTrialPackage === "function" ? { claimTrialPackage: options.claimTrialPackage } : {}),
+  }
   // 受控浏览器（持久 profile）：默认真起一个 Chromium；测试可注入。
   const openConsole = typeof options?.openConsole === "function" ? options.openConsole : openConsoleWindow
   const waitConsoleLogin =
@@ -307,12 +359,21 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
                 if (needsRefresh(ready) && ready.refreshToken) {
                   try { ready = (await refreshOnce(ready)) ?? ready } catch {}
                 }
+                // 快速看一眼订阅：缺 trial 就在后台补领（不阻塞 authorize）
+                let trialHint = ""
+                try {
+                  const raw = await readSubscription(ready)
+                  if (!trialSkuState(raw).present) {
+                    void ensureTrialPackage(ready, trialDeps).catch(() => {})
+                    trialHint = " 已安排自动领取免费试用套餐（30 天），首次读取额度时完成。"
+                  }
+                } catch {}
                 return {
                   // 插件自己完成，不需要 magpie 开浏览器
                   url: "",
                   opened: true,
                   instructions:
-                    `已复用 OfficeAce 客户端的登录态（${ready.user_phone || client.userName || client.accountId}），无需再次登录。`,
+                    `已复用 OfficeAce 客户端的登录态（${ready.user_phone || client.userName || client.accountId}），无需再次登录。` + trialHint,
                   method: "auto",
                   async callback() {
                     return successOf(ready)
@@ -457,6 +518,8 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
                   // 卡片名用手机号，不用 domain id（见 src/phone.mjs 顶部）
                   const identified = { ...cred, ...(await phoneField(cred)) }
                   if (!identified.modelAppKey) noteMaasPending(identified)
+                  // 登录后：缺个人体验版就后台补领（不阻塞 callback）
+                  void ensureTrialPackage(identified, trialDeps).catch(() => {})
                   return {
                     type: "success",
                     // magpie 的 refreshLead 机制读这个
@@ -600,6 +663,8 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
         if (!stored) return { error: "未登录", windows: [] }
         // 旧记录先补 model_info —— 有模型网关就不用再标「未接入 MaaS」
         const cred = await hydratedCredential(stored, maasFetcher)
+        // 「个人体验版」：缺 trial SKU 时自动免费开通（每进程每账号只尝试一次）
+        await ensureTrialPackage(cred, trialDeps).catch(() => {})
 
         // 没有模型网关信息（modelAppKey）：卡片上用 plan 标明，只影响显示。
         // ⚠ **不要**给 signIn: "expired" —— 那会让 magpie 显示「已退出登录 —
@@ -781,4 +846,6 @@ export const _internal = {
   primeSession,
   hydratedCredential,
   modelInfoCache,
+  ensureTrialPackage,
+  trialClaimCache,
 }

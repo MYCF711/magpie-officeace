@@ -231,6 +231,31 @@ export async function fetchUsage(cred) {
 
 // ── 个人体验版（trial 套餐） ──────────────────────────────────────
 
+/** 读原始订阅响应（`GET /v1/subscription`），给 trial 判定用。 */
+export async function readSubscription(cred) {
+  const r = await signV11Request(`${SUBSCRIPTION_BASE}${SUBSCRIPTION_PATH}`, cred, "GET")
+  if (!r.ok) throw new Error(`订阅查询失败：HTTP ${r.status}${r.text ? `：${r.text.trim().slice(0, 200)}` : ""}`)
+  try {
+    return JSON.parse(r.text)
+  } catch {
+    throw new Error("订阅查询失败：响应不是 JSON")
+  }
+}
+
+/**
+ * trial SKU 的状态：
+ *   { present:false }                       — 没有
+ *   { present:true, expired:true, sku }     — 有但已过期（按「没有」处理，允许再领）
+ *   { present:true, expired:false, sku }    — 有效
+ */
+export function trialSkuState(raw, now = Date.now()) {
+  const sku = (Array.isArray(raw?.skus) ? raw.skus : []).find((s) => s?.sku_code === TRIAL_SKU_CODE)
+  if (!sku) return { present: false }
+  const end = Date.parse(sku.expired_time ?? "")
+  const expired = Number.isFinite(end) ? end <= now : false
+  return { present: true, expired, sku }
+}
+
 /** trial 套餐的 SKU code（与客户端 `officeace.personal.package.trial` 一致）。 */
 export const TRIAL_SKU_CODE = "officeace.personal.package.trial"
 

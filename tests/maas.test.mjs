@@ -13,6 +13,9 @@ import os from "node:os"
 import path from "node:path"
 import { OfficeAceAuthPlugin, _internal } from "../index.mjs"
 
+// 测试里不自动领套餐（会真下单）
+process.env.MAGPIE_OFFICEACE_NO_TRIAL_CLAIM = "1"
+
 // 默认的 fetch 替身：权限接口回 401 = 「云端没有 model_info」，
 // 免得 usage/loader 的旧记录补全去真打网络（测试里没有真凭据）。
 const noModelInfo = async () => new Response(JSON.stringify({ error_code: "APIGW.0301" }), { status: 401 })
