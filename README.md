@@ -1,9 +1,12 @@
-# OfficeAce for magpie
+# OfficeAce + CodeArts for magpie
 
-**新用户福利 4,000 积分 + 每天签到 100 积分，7 个可计费模型，倍率最低 x0.08**
+**一个包，两个华为云 provider：`officeace`（果办）和 `codearts`（码道）。**
 
-OfficeAce（华为云 AgentArts / MaaS）的编码套餐接进 magpie。非官方插件，
-与华为云、OfficeAce 无任何关联。
+- `officeace` —— 新用户福利 4,000 积分 + 每天签到 100 积分，7 个可计费模型，倍率最低 x0.08
+- `codearts` —— 华为云码道代码智能体：OAuth 登录、模型目录、额度与每日「每日领取」签到
+
+OfficeAce / CodeArts（华为云 AgentArts / MaaS / 码道）接进 magpie。非官方插件，
+与华为云、OfficeAce、CodeArts 无任何关联。
 
 ```
 套餐     个人体验版 500 + 新用户专属福利 4,000 积分

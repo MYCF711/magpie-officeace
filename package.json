@@ -1,7 +1,7 @@
 {
   "name": "OfficeAce",
-  "version": "0.1.26",
-  "description": "OfficeAce (Huawei Cloud AgentArts / MaaS) for magpie: the billable models with live credit rates, through Huawei Cloud OAuth sign-in, plus credit windows and the daily check-in.",
+  "version": "0.2.0",
+  "description": "Huawei Cloud for magpie, two providers in one package: OfficeAce (AgentArts / MaaS) and CodeArts (码道), each with OAuth sign-in, live model catalog, credit windows and check-in where the product supports it.",
   "type": "module",
   "main": "./index.mjs",
   "exports": "./index.mjs",
@@ -31,6 +31,7 @@
     "opencode-plugin",
     "opencode-auth",
     "officeace",
+    "codearts",
     "huawei",
     "agentarts",
     "maas"

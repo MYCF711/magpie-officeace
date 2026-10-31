@@ -50,6 +50,7 @@ import { staticModels, liveModels } from "./src/models.mjs"
 import { checkMaasAccess, watchMaasAccess, probeMaasAccess, subscribeClientModelInfo } from "./src/maas.mjs"
 import { claimTrialPackage, readSubscription, trialSkuState } from "./src/api.mjs"
 import { readOfficeAceAccounts, pickOfficeAceCredential, officeAceAuthFile } from "./src/accounts.mjs"
+import { chooseLoginMethod, createBrowserLogin, createBuiltinLogin, LOGIN_KIND_BROWSER } from "./src/login-method.mjs"
 import { probeClientLogin } from "./src/officeace-client.mjs"
 import { openConsoleWindow, waitForLoginAndSave, loadSavedCookies, primeSession, closeWindow, CONSOLE_URL } from "./src/console-browser.mjs"
 
@@ -286,7 +287,13 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
   // magpie 保存账号的那个文件（只读；见 src/accounts.mjs）。测试可注入。
   const authFile = officeAceAuthFile({ file: options?.authFile })
   // 测试注入：真实的 beginLogin 会去 CLAW 注册 state 并后台轮询 10 分钟
-  const startLogin = typeof options?.beginLogin === "function" ? options.beginLogin : beginLogin
+  // 登录入口统一走 src/login-method.mjs：现在只有浏览器实现；下一期把
+  // options.builtinLogin（账号/密码/验证码）传进来即可，浏览器自动降为回退。
+  const loginMethod = chooseLoginMethod({
+    kind: options?.loginKind ?? LOGIN_KIND_BROWSER,
+    browser: createBrowserLogin(typeof options?.beginLogin === "function" ? options.beginLogin : beginLogin),
+    builtin: options?.builtinLogin ?? null,
+  })
 
   const log = (msg, level = "info") => {
     try {
@@ -506,7 +513,7 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
             }
 
             // ② 凭据不能用（或没有）：真正的华为云登录
-            const started = await startLogin()
+            const started = await loginMethod.start()
             return {
               url: started.url,
               instructions: MAAS_OAUTH_INSTRUCTIONS,
@@ -814,6 +821,10 @@ function maasBaseOf(cred) {
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
 }
 
+// 第二个 provider：CodeArts（华为云）。实现在 src/codearts/index.mjs（从社区 0.3.0
+// 合并版拆出来的单文件模块；共享的华为云 helper 也带着，见模块里的注释）。
+export { CodeArtsAuthPlugin } from "./src/codearts/index.mjs"
+
 // 供测试引用（⚠ 入口文件不要导出 helper 函数，否则会被当插件调用）
 export const _internal = {
   PROVIDER,
@@ -848,4 +859,7 @@ export const _internal = {
   modelInfoCache,
   ensureTrialPackage,
   trialClaimCache,
+  chooseLoginMethod,
+  createBrowserLogin,
+  createBuiltinLogin,
 }
