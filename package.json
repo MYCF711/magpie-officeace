@@ -1,7 +1,7 @@
 {
-  "name": "OfficeAce",
-  "version": "0.2.0",
-  "description": "Huawei Cloud for magpie, two providers in one package: OfficeAce (AgentArts / MaaS) and CodeArts (码道), each with OAuth sign-in, live model catalog, credit windows and check-in where the product supports it.",
+  "name": "华为云 HUAWEI",
+  "version": "0.2.1",
+  "description": "Huawei Cloud for magpie: OfficeAce (果办) and CodeArts (码道) in one package — OAuth sign-in, live model catalog, credit windows and daily check-in where the product supports it.",
   "type": "module",
   "main": "./index.mjs",
   "exports": "./index.mjs",
@@ -34,7 +34,10 @@
     "codearts",
     "huawei",
     "agentarts",
-    "maas"
+    "maas",
+    "果办",
+    "码道",
+    "huaweicloud"
   ],
   "license": "MIT",
   "repository": {

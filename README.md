@@ -1,9 +1,9 @@
-# OfficeAce + CodeArts for magpie
+# 华为云 HUAWEI for magpie
 
-**一个包，两个华为云 provider：`officeace`（果办）和 `codearts`（码道）。**
+**一个包，两个华为云 provider：果办 `officeace` 和码道 `codearts`。**
 
-- `officeace` —— 新用户福利 4,000 积分 + 每天签到 100 积分，7 个可计费模型，倍率最低 x0.08
-- `codearts` —— 华为云码道代码智能体：OAuth 登录、模型目录、额度与每日「每日领取」签到
+- 果办 `officeace` —— 新用户福利 4,000 积分 + 每天签到 100 积分，7 个可计费模型，倍率最低 x0.08
+- 码道 `codearts` —— 华为云码道（CodeArts）代码智能体：OAuth 登录、模型目录、额度与每日「每日领取」签到
 
 OfficeAce / CodeArts（华为云 AgentArts / MaaS / 码道）接进 magpie。非官方插件，
 与华为云、OfficeAce、CodeArts 无任何关联。
@@ -183,7 +183,9 @@ cd ~/.config/magpie/plugins && ~/.cache/magpie/bun/1.4.4/magpie-bun.exe install
 
 ```bash
 magpie plugin list
-# officeace (OfficeAce, 7 models)  signed in as <账号>
+# 华为云 HUAWEI (OfficeAce 0.2.1)  on
+#   果办 OfficeAce (OfficeAce, 7 models)  signed in as <账号>
+#   码道 CodeArts (CodeArts, 10 models)  signed in as <账号>
 ```
 
 ⚠ 改了代码要 **bump `version` 再打包** —— 同一版本号重打，bun 会命中缓存（输出 `no changes`）。

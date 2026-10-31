@@ -1,3 +1,8 @@
+## 0.2.1 — 2026-10-31
+
+- **显示名调整（只改显示，不改包名/provider id）**：卡片标题从 `OfficeAce` 改为 **`华为云 HUAWEI`**（`package.json.name`，git 安装时它就是卡片标题；npm 包名仍是 `officeace-auth`，已装用户不用重装）。provider 名称：`officeace` → **果办 OfficeAce**，`codearts` → **码道 CodeArts**。`registry-entry.json` 的 `name`/`providers`/摘要同步更新（现在列出两个 provider）。
+- **核实「officeace 模型 14 → 7」不是回退**：`src/models.mjs` 自 0.1.20 起未变；同一台机器、同一账号 189****8051，装 0.1.26 与 0.2.0 跑 `magpie plugin list` 都是 **7 models**。7 是设计值（`/v1/model-token-rates` 白名单 ∩ `/v2/models` 目录，README 与 internals 都写 7）。14 只可能是旧构建/旧缓存（静态表 10 ∪ 实时 7 去重后正好 14），不是本次合并引入的。
+
 ## 0.2.0 — 2026-10-31
 
 - **合并双平台：一个包同时提供 `officeace` + `codearts` 两个 provider** —— 包名/目录仍是 `magpie-officeace`，两个 provider id 不变（现有 `plugin-auth.json` 记录无需重登）。`codearts`（华为云码道）提供 OAuth 登录、模型目录/额度/每日领取签到，代码在 `src/codearts/index.mjs`；`officeace` 保留 0.1.26 的全部能力（client-subscription 自动接模型、个人体验版自动领取、OfficeAce 客户端登录态复用、MaaS 标记语义）。登录入口统一走 `src/login-method.mjs`（当前浏览器实现，后续可接内置登录）。
