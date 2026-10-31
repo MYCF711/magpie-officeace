@@ -2,6 +2,9 @@
 
 - **英文部分照抄官方品牌字样**：`华为云 HUAWEI`（HUAWEI 全大写）、`码道 CodeArts`、`果办 OfficeAce` —— 与华为云官网首屏/产品页一致。
 - **显示名调整（只改显示，不改包名/provider id）**：卡片标题从 `OfficeAce` 改为 **`华为云 HUAWEI`**（`package.json.name`，git 安装时它就是卡片标题；npm 包名仍是 `officeace-auth`，已装用户不用重装）。provider 名称：`officeace` → **果办 OfficeAce**，`codearts` → **码道 CodeArts**。`registry-entry.json` 的 `name`/`providers`/摘要同步更新（现在列出两个 provider）。
+- **模型别名去重**：CodeArts 的 agent 列表同时给出 `deepseek-v4.1-flash` 与 `deepseek-v4.1-flash-1017`（同一模型、同名同倍率），以前两条都列。现在按 `normalizeModelId` 的基名去重：账号 benefit/注册 id 优先，否则保留裸 id —— 实测该账号 10 → 9 条。
+- **可读的账号名**：`codearts` 的 `usage().user` 有手机号就显示打码手机号，否则显示 accountId 尾 6 位（`…e6a47f`），不再出现完整 `iam::…`；`officeace` 同样加了尾 6 位兜底。
+- **插件自动更新**：magpie 只自动更新 `@magpie-community/*`；本包复刻 `magicrew` 的 `src/auto-maintenance.mjs` —— 读 `plugin-updates.json` 的 `waiting`，调 `magpie plugin update`，成功后补 `updated[]`（「已自动更新」徽章读它）。找不到 magpie exe 时静默记 `no-magpie-exe`。
 - **核实「officeace 模型 14 → 7」不是回退**：`src/models.mjs` 自 0.1.20 起未变；同一台机器、同一账号 189****8051，装 0.1.26 与 0.2.0 跑 `magpie plugin list` 都是 **7 models**。7 是设计值（`/v1/model-token-rates` 白名单 ∩ `/v2/models` 目录，README 与 internals 都写 7）。14 只可能是旧构建/旧缓存（静态表 10 ∪ 实时 7 去重后正好 14），不是本次合并引入的。
 
 ## 0.2.0 — 2026-10-31

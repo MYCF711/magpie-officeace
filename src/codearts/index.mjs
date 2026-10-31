@@ -2093,6 +2093,15 @@ function claimedOutcome(benefit, credit) {
  * the date-stripped one (a dated id and its bare form are two models with
  * opposite billing), so dedupe is by exact id too.
  */
+/** A readable account name: the phone when known, else the id's tail (never a full `iam::…` URN). */
+function shortAccountName(cred) {
+  const phone = firstOf(cred?.user_phone)
+  if (phone) return phone
+  const name = firstOf(accountIdentityOf(cred).name, cred.accountId, "")
+  const bare = name.replace(/^iam::?/i, "").replace(/^:+/i, "")
+  return bare.length > 8 ? `…${bare.slice(-6)}` : bare || name
+}
+
 function parseModelInfo(m, seen) {
   const id = m?.model_id
   if (typeof id !== "string" || !id) return undefined
@@ -2230,6 +2239,31 @@ async function fetchAgentModels(cred, fetcher, state) {
 }
 
 /**
+ * Two ids that normalize to the same model (a dated alias such as
+ * `deepseek-v4.1-flash-1017` and the bare `deepseek-v4.1-flash`) are one
+ * model to the reader: magpie shows both names and rates side by side.
+ * Keep one — the account's benefit/registered id when it has one, else the
+ * bare canonical id — and drop the alias.
+ */
+function dedupeAliases(models, benefitIds = new Set()) {
+  const byBase = new Map()
+  for (const m of models) {
+    const base = normalizeModelId(m.id)
+    const prev = byBase.get(base)
+    if (!prev) {
+      byBase.set(base, m)
+      continue
+    }
+    const prevBenefit = prev.benefit === true || benefitIds.has(prev.id)
+    const curBenefit = m.benefit === true || benefitIds.has(m.id)
+    if (curBenefit && !prevBenefit) byBase.set(base, m)
+    else if (prevBenefit) continue
+    else if (m.id === base && prev.id !== base) byBase.set(base, m)
+  }
+  return [...byBase.values()]
+}
+
+/**
  * Fetch the account's live model list and merge it:
  * - the free models gateway/config lists, but only once today's benefit is
  *   claimed for the account (else they are left out: they answer `benefit not
@@ -2301,7 +2335,8 @@ async function fetchRemoteModels(cred, fetcher, state) {
     if (gateway) state.benefit = new Set(benefitIds)
     if (builtin) state.regular = new Set(regularIds)
   }
-  return models
+  const benefitSet = new Set([...(state?.benefit ?? []), ...benefitIds])
+  return dedupeAliases(models, benefitSet)
 }
 
 /** Chinese labels for the credit metric buckets CodeArts reports. */
@@ -2724,7 +2759,7 @@ export const CodeArtsAuthPlugin = async ({ client } = {}, options = {}) => {
           // its URN — read once here for an account whose credential predates
           // that read (the next refresh stores it).
           const phone = firstOf(cred.user_phone) || (await fetchAccountPhone(cred, fetcher))
-          const user = phone || accountIdentityOf(cred).name
+          const user = phone || shortAccountName(cred)
           return user ? { ...usage, user } : usage
         } catch (e) {
           return { error: e?.message ?? String(e), windows: [] }
@@ -2881,7 +2916,7 @@ export const _internal = {
   peekAnswer, completionFromChunks, createConcurrencyGate, delay, retryDelayMs,
   isRegularModel, queueInfoOf, waitInQueue, TRACE_QUEUE_URL, SESSION_HEADER,
   snapRequest, dailyCheckin,
-  parseModelInfo, extractArray, fetchRemoteModels, creditWindow, benefitWindow, usageFromStatistics,
+  parseModelInfo, extractArray, fetchRemoteModels, dedupeAliases, shortAccountName, creditWindow, benefitWindow, usageFromStatistics,
 }
 
 
