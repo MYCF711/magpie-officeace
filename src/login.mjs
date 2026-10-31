@@ -45,6 +45,7 @@ import {
 } from "./constants.mjs"
 
 import { generateDpopKeyPair, importDpopKey, signDpop, signHuaweiRequest } from "./crypto.mjs"
+import { subscribeClientModelInfo } from "./maas.mjs"
 
 // ── ① 云端登记 state ──────────────────────────────────────────────
 
@@ -147,14 +148,21 @@ async function fetchModelInfo(cred) {
   }
 
   const j = JSON.parse(text)
-  const auth = j.subscription?.model_info?.model_auth_info
-  const base = j.subscription?.model_info?.model_api_url_base
+  let auth = j.subscription?.model_info?.model_auth_info
+  let base = j.subscription?.model_info?.model_api_url_base
 
+  // 权限接口没有 model_info → 自动「接入模型」一次（和 OfficeAce 客户端登录后
+  // 调的是同一个 client-subscription 端点，见 src/maas.mjs）。
   if (typeof auth?.model_app_key !== "string" || typeof auth?.model_app_secret !== "string") {
-    // ⚠ 必须给出路：只说「未订阅」用户无从下手
-    throw new Error(
-      "账号未开通 ModelArts MaaS：请在华为云控制台或 OfficeAce 客户端完成开通后重试。",
-    )
+    const sub = await subscribeClientModelInfo(cred).catch(() => null)
+    if (sub?.ok && sub.granted) {
+      auth = { model_app_key: sub.modelAppKey, model_app_secret: sub.modelAppSecret }
+      base = sub.maasBaseUrl
+    } else {
+      throw new Error(
+        "账号未开通 ModelArts MaaS：自动接入失败（" + (sub?.detail ?? "云端未返回 model_info") + "）。请稍后重试。",
+      )
+    }
   }
 
   return {
