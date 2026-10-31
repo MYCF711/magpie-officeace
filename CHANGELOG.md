@@ -1,3 +1,7 @@
+## 0.1.26 — 2026-10-31
+
+- **新增：缺「个人体验版」时自动免费开通** —— `usage()`（首次读额度）与 `authorize()`（登录后/复用客户端登录态时）会检查 `GET /v1/subscription` 的 `skus`：只有明确没有 `officeace.personal.package.trial`（或该条已过期）时，才调 `POST {CLAW_BASE}/v1/subscription/period` 下单（免费 0 元、MONTH×1、auto_pay:1）。每个账号每进程只尝试一次（失败不重试，结果缓存在内存）；下单前后各重读 skus 确认。真机实测（181****6710）：下单 200 `{status:"PAYING"}`，约 5 秒后 `subscribe_status=SUBSCRIBED`、`skus` 出现 `个人体验版`（500 分 + 200 次联网搜索/30 天），`usage()` 显示「个人体验版 · 剩 500 / 新用户福利 4000 / 签到 100」——与 4000 福利不冲突。`loader()`/chat 不触发写操作。
+
 ## 0.1.25 — 2026-10-31
 
 - **新增：自动接入模型（登录即得 MaaS key）** —— 登录/加载账号时如果 `client-permission-validate` 没有 `model_info`，插件自动调 `POST {CLAW_BASE}/v1/claw/client-subscription`（`x-subscription-type: v2`、V11 签名、body `{}`，与 OfficeAce 客户端登录后「开通」按钮同一个端点）拿到 `model_info.model_auth_info`，写回账号 —— 不需要打开 OfficeAce 客户端 UI。真机实测：181****6710 / 180****2361 / 187****5670 三个原本「未接入 MaaS」的账号自动接入后，`client-permission-validate` 均返回 model_app_key，网关 `/v2/models` 均 200（25 个模型）；插件 `usage()` 不再标「未接入 MaaS」，`models` 含 deepseek-v4.1-flash。
