@@ -47,7 +47,7 @@ import { beginLogin, refreshOnce } from "./src/login.mjs"
 import { checkin, fetchCatalog, fetchTokenRates, fetchUsage } from "./src/api.mjs"
 import { chatFetch } from "./src/chat.mjs"
 import { staticModels, liveModels } from "./src/models.mjs"
-import { checkMaasAccess, watchMaasAccess, probeMaasAccess } from "./src/maas.mjs"
+import { checkMaasAccess, watchMaasAccess, probeMaasAccess, subscribeClientModelInfo } from "./src/maas.mjs"
 import { readOfficeAceAccounts, pickOfficeAceCredential, officeAceAuthFile } from "./src/accounts.mjs"
 import { probeClientLogin } from "./src/officeace-client.mjs"
 import { openConsoleWindow, waitForLoginAndSave, loadSavedCookies, primeSession, closeWindow, CONSOLE_URL } from "./src/console-browser.mjs"
@@ -185,7 +185,12 @@ async function hydratedCredential(cred, fetcher = (...args) => fetch(...args)) {
   const id = accountIdentityOf(cred).id || cred.accountId || cred.refreshToken || "default"
   const hit = modelInfoCache.get(id)
   if (hit && Date.now() - hit.at < 6 * 3600_000) return hit.cred
-  const r = await checkMaasAccess(cred, fetcher, { timeoutMs: 3_000 }).catch(() => null)
+  let r = await checkMaasAccess(cred, fetcher, { timeoutMs: 3_000 }).catch(() => null)
+  // 权限接口说没开通 → 自动走一次「接入模型」（client-subscription），登录即得 key
+  if (!r?.ok || !r.granted) {
+    const sub = await subscribeClientModelInfo(cred, fetcher, { timeoutMs: 3_000 }).catch(() => null)
+    if (sub?.ok && sub.granted) r = sub
+  }
   if (!r?.ok || !r.granted) return cred
   const merged = { ...cred, modelAppKey: r.modelAppKey, modelAppSecret: r.modelAppSecret, maasBaseUrl: r.maasBaseUrl }
   modelInfoCache.set(id, { at: Date.now(), cred: merged })
@@ -332,14 +337,45 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
               }
             }
 
-            const probed = pending
+            let probed = pending
               ? await probeMaasAccess(pending, maasFetcher, { timeoutMs: maasProbeMs })
               : { route: "dead", credential: null }
+            // 没开通但凭据有效 → 自动「接入模型」（client-subscription）一次；
+            // 成功就直接完成，不再让用户去控制台点任何东西。
+            let autoSubscribed = false
+            if (probed.route === "not-granted" && probed.credential) {
+              const sub = await subscribeClientModelInfo(probed.credential, maasFetcher, { timeoutMs: 3_000 }).catch(() => null)
+              if (sub?.ok && sub.granted) {
+                autoSubscribed = true
+                probed = {
+                  route: "granted",
+                  credential: {
+                    ...probed.credential,
+                    modelAppKey: sub.modelAppKey,
+                    modelAppSecret: sub.modelAppSecret,
+                    maasBaseUrl: sub.maasBaseUrl,
+                  },
+                }
+              }
+            }
             const route = probed.route
 
-            // ①-a 已经开通：不用轮询，直接完成（顺带把控制台开给用户）
+            // ①-a 已经开通：不用轮询，直接完成。
+            //     自动接入成功的：不打开任何页面，直接完成。
+            //     本来就开通的：顺带把控制台开给用户（原行为）。
             if (route === "granted" && probed.credential) {
               const ready = probed.credential
+              if (autoSubscribed) {
+                return {
+                  url: "",
+                  opened: true,
+                  instructions: "已自动为你接入模型（无需在控制台操作），现在可以直接使用。",
+                  method: "auto",
+                  async callback() {
+                    return successOf(ready)
+                  },
+                }
+              }
               return {
                 url: MAAS_CONSOLE_URL,
                 instructions: MAAS_ALREADY_INSTRUCTIONS,
