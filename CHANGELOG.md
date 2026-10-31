@@ -1,3 +1,7 @@
+## 0.2.2 — 2026-10-31
+
+- **图标分三级**：插件卡片图标（`package.json` 的 `magpie.icon`）改为**华为云 HUAWEI** 的红色花瓣标志；`codearts` provider 用**码道 CodeArts** 的方形标志（客户端素材裁切，128×128）；`officeace` provider 保留原来的果办橙色图标。没有独立图标的 provider 会回退到插件级（华为云）。两处 data URI 都远小于 magpie 的 1 MB 上限。
+
 ## 0.2.1 — 2026-10-31
 
 - **英文部分照抄官方品牌字样**：`华为云 HUAWEI`（HUAWEI 全大写）、`码道 CodeArts`、`果办 OfficeAce` —— 与华为云官网首屏/产品页一致。
