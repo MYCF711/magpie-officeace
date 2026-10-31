@@ -2,6 +2,8 @@
 
 **一个包，两个华为云 provider：果办 `officeace` 和码道 `codearts`。**
 
+> 英文部分照抄华为云官方品牌字样：`码道 CodeArts`（[codearts.huaweicloud.com](https://codearts.huaweicloud.com/) 首屏）、`果办 OfficeAce`（[huaweicloud.com/product/officeace.html](https://www.huaweicloud.com/product/officeace.html) 产品名）、`华为云 HUAWEI`（官方英文品牌全大写）。
+
 - 果办 `officeace` —— 新用户福利 4,000 积分 + 每天签到 100 积分，7 个可计费模型，倍率最低 x0.08
 - 码道 `codearts` —— 华为云码道（CodeArts）代码智能体：OAuth 登录、模型目录、额度与每日「每日领取」签到
 
