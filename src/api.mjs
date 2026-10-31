@@ -228,6 +228,70 @@ export async function fetchUsage(cred) {
   return { plan: planName, windows }
 }
 
+// ── 个人体验版（trial 套餐） ──────────────────────────────────────
+
+/** trial 套餐的 SKU code（与客户端 `officeace.personal.package.trial` 一致）。 */
+export const TRIAL_SKU_CODE = "officeace.personal.package.trial"
+
+/**
+ * 「免费开通」下单体：与 OfficeAce 客户端订阅页的 trial 按钮同构
+ * （客户端 `Xu()`：`POST /api/subscription/create-order {productId, billingOption, autoPay:1}`
+ *  → 服务端 `createOrder` → `POST {cloud}/v1/subscription/period`）。
+ *
+ * 客户端源码里 `subscribe_atomic_product_id` 缺省是空串、周期缺省 MONTH×1，
+ * 所以免费套餐不需要先查价也能构造出请求。
+ */
+export function trialOrderBody(cloudMeta = {}) {
+  return {
+    service_type: "hws.service.type.agentarts",
+    subscribe_period_type: cloudMeta.periodType ?? 2,
+    subscribe_period_value: cloudMeta.periodValue ?? 1,
+    auto_renewal: 0,
+    auto_pay: 1,
+    subscribe_sku_info: {
+      subscribe_quantity: 1,
+      subscribe_sku_code: TRIAL_SKU_CODE,
+      subscribe_sub_product_code: cloudMeta.subProductCode ?? "hws.resource.type.agentarts.platform",
+      subscribe_atomic_product_id: cloudMeta.atomicProductId ?? "",
+    },
+    agreement_list: [
+      { agree_declaration: 1, version: "1.0", privacy_statement: "/declaration/agentarts.html" },
+    ],
+  }
+}
+
+/**
+ * ⚠ **写操作**：给账号「免费开通」个人体验版（trial 套餐）。
+ *
+ * 这是套餐系统（订阅面 `/v1/subscription/period`），与
+ * `subscribeClientModelInfo()` 的模型网关（`/v1/claw/client-subscription`）**是两套**：
+ * 前者给 500 积分 + 200 次联网搜索（30 天），后者只给 model_app_key。
+ *
+ * 2026-10-31 只读到的事实：181****0632 的该 SKU 生效时间 `2026-10-31T03:47:41Z`、
+ * 有效期 30 天 —— 说明它是在客户端订阅页点「免费开通」那一刻才创建的，不是注册自动发。
+ *
+ * 本函数**没有接进任何自动流程**：需要显式调用（是否要自动领取由上层决定）。
+ */
+export async function claimTrialPackage(cred, request = signV11Request, opts = {}) {
+  const url = `${SUBSCRIPTION_BASE}/v1/subscription/period`
+  const body = JSON.stringify(trialOrderBody(opts.cloudMeta))
+  let r
+  try {
+    // signV11Request 自己发请求，返回 {ok,status,text}
+    r = await request(url, cred, "POST", body)
+  } catch (e) {
+    return { ok: false, status: 0, detail: String(e?.message ?? e).slice(0, 200) }
+  }
+  if (!r?.ok) {
+    return { ok: false, status: r?.status ?? 0, detail: String(r?.text ?? "").trim().slice(0, 300) }
+  }
+  let j = null
+  try {
+    j = JSON.parse(r.text)
+  } catch {}
+  return { ok: true, status: r.status, orderId: j?.order_id ?? null, raw: j }
+}
+
 // ── 签到 ──────────────────────────────────────────────────────────
 
 /**
