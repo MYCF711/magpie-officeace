@@ -1,4 +1,4 @@
-## 未发布
+## 0.1.25 — 2026-10-31
 
 - **新增：自动接入模型（登录即得 MaaS key）** —— 登录/加载账号时如果 `client-permission-validate` 没有 `model_info`，插件自动调 `POST {CLAW_BASE}/v1/claw/client-subscription`（`x-subscription-type: v2`、V11 签名、body `{}`，与 OfficeAce 客户端登录后「开通」按钮同一个端点）拿到 `model_info.model_auth_info`，写回账号 —— 不需要打开 OfficeAce 客户端 UI。真机实测：181****6710 / 180****2361 / 187****5670 三个原本「未接入 MaaS」的账号自动接入后，`client-permission-validate` 均返回 model_app_key，网关 `/v2/models` 均 200（25 个模型）；插件 `usage()` 不再标「未接入 MaaS」，`models` 含 deepseek-v4.1-flash。
 
