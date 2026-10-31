@@ -1,3 +1,7 @@
+## 0.2.0 — 2026-10-31
+
+- **合并双平台：一个包同时提供 `officeace` + `codearts` 两个 provider** —— 包名/目录仍是 `magpie-officeace`，两个 provider id 不变（现有 `plugin-auth.json` 记录无需重登）。`codearts`（华为云码道）提供 OAuth 登录、模型目录/额度/每日领取签到，代码在 `src/codearts/index.mjs`；`officeace` 保留 0.1.26 的全部能力（client-subscription 自动接模型、个人体验版自动领取、OfficeAce 客户端登录态复用、MaaS 标记语义）。登录入口统一走 `src/login-method.mjs`（当前浏览器实现，后续可接内置登录）。
+
 ## 0.1.26 — 2026-10-31
 
 - **新增：缺「个人体验版」时自动免费开通** —— `usage()`（首次读额度）与 `authorize()`（登录后/复用客户端登录态时）会检查 `GET /v1/subscription` 的 `skus`：只有明确没有 `officeace.personal.package.trial`（或该条已过期）时，才调 `POST {CLAW_BASE}/v1/subscription/period` 下单（免费 0 元、MONTH×1、auto_pay:1）。每个账号每进程只尝试一次（失败不重试，结果缓存在内存）；下单前后各重读 skus 确认。真机实测（181****6710）：下单 200 `{status:"PAYING"}`，约 5 秒后 `subscribe_status=SUBSCRIBED`、`skus` 出现 `个人体验版`（500 分 + 200 次联网搜索/30 天），`usage()` 显示「个人体验版 · 剩 500 / 新用户福利 4000 / 签到 100」——与 4000 福利不冲突。`loader()`/chat 不触发写操作。
