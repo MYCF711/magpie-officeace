@@ -1,11 +1,12 @@
 {
   "package": "officeace-auth",
-  "name": "OfficeAce",
+  "name": "华为云 HUAWEI",
   "providers": [
-    "officeace"
+    "officeace",
+    "codearts"
   ],
   "summary": {
-    "en": "Unofficial: OfficeAce (Huawei Cloud AgentArts) coding plans with Huawei Cloud OAuth sign-in — billable GLM, DeepSeek and Kimi models with live credit rates, credit usage, and the daily check-in.",
-    "zh": "非官方：OfficeAce（华为云 AgentArts）编码套餐，华为云 OAuth 登录；GLM、DeepSeek、Kimi 等可计费模型实时列出（带消费倍率）、积分用量与每日签到。"
+    "en": "Unofficial: Huawei Cloud sign-in for magpie, two providers in one package — OfficeAce (果办: billable GLM/DeepSeek/Kimi models with live credit rates, credits, daily check-in) and CodeArts (码道: OpenAI-compatible coding models signed with temporary AK/SK).",
+    "zh": "非官方：一个包接华为云两个 provider —— 果办 OfficeAce（可计费 GLM / DeepSeek / Kimi 模型、实时倍率、积分、每日签到）与码道 CodeArts（临时 AK/SK 签名的编码模型）。"
   }
 }
