@@ -114,3 +114,15 @@ jobs:
               --title "$GITHUB_REF_NAME" \
               --notes-file notes.md
           fi
+
+      - name: Publish to npm（有 NPM_TOKEN 才发）
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "没有 NPM_TOKEN，跳过 npm 发布（Release 已建）"
+            exit 0
+          fi
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > "$HOME/.npmrc"
+          npm run publish:npm
