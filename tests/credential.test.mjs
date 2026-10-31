@@ -9,6 +9,9 @@ import assert from "node:assert/strict"
 import { OfficeAceAuthPlugin } from "../index.mjs"
 import { credentialOf, toStored, expiryMs } from "../src/credential.mjs"
 
+// 测试里不自动领套餐（会真下单）
+process.env.MAGPIE_OFFICEACE_NO_TRIAL_CLAIM = "1"
+
 const noModelInfo = async () => new Response(JSON.stringify({ error_code: "APIGW.0301" }), { status: 401 })
 
 const sts = {

@@ -9,6 +9,9 @@ import path from "node:path"
 import { OfficeAceAuthPlugin, _internal } from "../index.mjs"
 import { subscribeClientModelInfo } from "../src/maas.mjs"
 
+// 测试里不自动领套餐（会真下单）
+process.env.MAGPIE_OFFICEACE_NO_TRIAL_CLAIM = "1"
+
 const stsOnly = {
   access: "HSTAOZ3JN3WWYF3L",
   secret: "9hefA4eK2KTT",

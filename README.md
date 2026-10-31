@@ -72,6 +72,9 @@ magpie 每天调一次 `POST /v1/subscription/bonus/claim`，领当日签到积�
 - **不会再显示「已退出登录 — 请重新登录」**：这条以前是 `signIn: "expired"` 带来的，但「缺 modelAppKey」不等于登录失效 —— 这些账号的 STS 凭据是好的（额度、签到都正常）。只有 `refresh_token` 真的失效时才会要求重新登录。
 - 这类账号的处理：**用这个账号打开一次 OfficeAce 客户端**（左侧「模型」→ 右上角「接入模型」→「接入华为云 MaaS 模型」），让云端下发模型网关信息；插件会在下一次 `usage()` 自动补上（按账号缓存 6 小时）。
 
+**自动领取「个人体验版」**：`usage()` / `authorize()` 发现账号的 `GET /v1/subscription` 里**没有** `officeace.personal.package.trial`（或已过期）时，自动调
+`POST {CLAW_BASE}/v1/subscription/period` 下一张**免费 0 元**的 trial 订单（MONTH×1、`auto_pay:1`，需要 IAM project id + SKU 的 atomic product id）。每账号每进程只尝试一次，失败不重试；下单前后都会重读 `skus` 确认。成功后卡片显示「个人体验版 · 剩 500」，与「新用户专属福利 4000」并存。
+
 **自动接入模型（登录即得 key）**：登录完成后如果 `client-permission-validate` 没给 `model_info`，插件会自动调
 `POST {CLAW_BASE}/v1/claw/client-subscription`（`x-subscription-type: v2` + V11 签名，body `{}`）—— 这正是 OfficeAce 客户端登录后「开通」按钮走的同一个端点（客户端源码 `channel-plugins/auth/officeace-huawei-oauth` 的 `subscriptionClaw()`）。成功后会拿到 `model_info.model_auth_info`（`model_app_key`/`model_app_secret`）并写回账号，**全程不需要打开 OfficeAce 客户端 UI**。
 
