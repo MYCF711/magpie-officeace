@@ -124,5 +124,10 @@ jobs:
             echo "没有 NPM_TOKEN，跳过 npm 发布（Release 已建）"
             exit 0
           fi
+          ver="$(node -p "require('./package.json').version")"
+          if npm view "officeace-auth@${ver}" version >/dev/null 2>&1; then
+            echo "officeace-auth@${ver} 已在 npm 上，跳过重复发布"
+            exit 0
+          fi
           echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > "$HOME/.npmrc"
           npm run publish:npm
