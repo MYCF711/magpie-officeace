@@ -1,3 +1,7 @@
+## 0.2.4 — 2026-10-31
+
+- **图标改为满格（无 margin）**：`华为云 HUAWEI` 卡片图标去掉四周 padding（花瓣按宽度铺满 128×128，上下按比例留透明）；`码道 CodeArts` 重新按圆角方块的真实边界裁切（x 40–136 / y 72–168），不再带上方的黑色条带；`果办 OfficeAce` 原本就是满格，未动。三者都是 128×128 透明 PNG data URI。
+
 ## 0.2.3 — 2026-10-31
 
 - **显示名改用 `magpie.name`，包名回到 slug**：`package.json.name` = `magpie-officeace`（bun 依赖键不再含空格/中文，`magpie plugin update` 不再报 `unrecognised dependency format`）；显示名放在 `magpie.name` = **华为云 HUAWEI**，并由 `magpie.summary` 说明双 provider。`magpie plugin list`/GUI 卡片按 `magpie.name` 显示；provider 名保持 `码道 CodeArts` / `果办 OfficeAce`，图标保持 0.2.2 的三级设置。
