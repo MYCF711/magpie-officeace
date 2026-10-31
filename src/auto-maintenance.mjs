@@ -25,7 +25,7 @@ import { join, dirname, basename } from "node:path"
 import { execFileSync, spawn } from "node:child_process"
 
 /** 本包在 magpie 里的名字：git 装是 package.json 的 name，npm 装是 npm 包名。 */
-const PKG_NAMES = ["华为云 HUAWEI", "officeace-auth"]
+const PKG_NAMES = ["magpie-officeace", "officeace-auth"]
 const AUTO_DIR = () => join(homedir(), ".config", "magpie")
 const CACHE_DIR = () => join(homedir(), ".cache", "magpie")
 const THROTTLE_MS = 6 * 3600_000 // 同一次更新失败后，6 小时内不再试
