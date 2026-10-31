@@ -77,7 +77,7 @@ test("usage：没有 modelAppKey 的账号只标「未接入 MaaS」，不再误
 test("usage：有 modelAppKey 的账号两个字段都不给", async () => {
   const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile(), fetch: noModelInfo })
   const out = await withSubscriptionFetch(() => plugin.auth.usage(async () => record(withMaas), {}))
-  assert.equal(out.plan, "OfficeAce")
+  assert.equal(out.plan, "果办 OfficeAce")
   assert.equal("signIn" in out, false)
 })
 

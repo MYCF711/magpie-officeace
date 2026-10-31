@@ -2548,7 +2548,7 @@ export const CodeArtsAuthPlugin = async ({ client } = {}, options = {}) => {
       config.provider ??= {}
       config.provider[PROVIDER] ??= {}
       const p = config.provider[PROVIDER]
-      p.name ??= "CodeArts"
+      p.name ??= "码道 CodeArts"
       p.npm ??= NPM
       p.api ??= CHAT_API_BASE
       p.models = { ...Object.fromEntries(CATALOG.map((m) => [m.id, configModel(m)])), ...(p.models ?? {}) }

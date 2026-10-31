@@ -55,7 +55,7 @@ import { probeClientLogin } from "./src/officeace-client.mjs"
 import { openConsoleWindow, waitForLoginAndSave, loadSavedCookies, primeSession, closeWindow, CONSOLE_URL } from "./src/console-browser.mjs"
 
 const PROVIDER = "officeace"
-const PROVIDER_NAME = "OfficeAce"
+const PROVIDER_NAME = "果办 OfficeAce"
 const NPM = "@ai-sdk/openai-compatible"
 
 // 未接入 MaaS 的账号在卡片上的标记。`plan` 只被 magpie 当文字显示（不参与
