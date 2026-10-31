@@ -16,6 +16,7 @@
 
 import {
   BONUS_CLAIM_PATH,
+  CLAW_BASE,
   MODELS_PATH,
   REQUEST_TIMEOUT_MS,
   SUBSCRIPTION_BASE,
@@ -25,7 +26,7 @@ import {
   maasBase,
 } from "./constants.mjs"
 
-import { basicAuthorization, signV11Request } from "./crypto.mjs"
+import { basicAuthorization, signHuaweiRequest, signV11Request } from "./crypto.mjs"
 
 // ── 倍率 ──────────────────────────────────────────────────────────
 
@@ -272,24 +273,80 @@ export function trialOrderBody(cloudMeta = {}) {
  *
  * 本函数**没有接进任何自动流程**：需要显式调用（是否要自动领取由上层决定）。
  */
-export async function claimTrialPackage(cred, request = signV11Request, opts = {}) {
-  const url = `${SUBSCRIPTION_BASE}/v1/subscription/period`
-  const body = JSON.stringify(trialOrderBody(opts.cloudMeta))
+/** IAM 项目列表里按 region 取 project_id（下单要 `X-Project-ID`）。 */
+export async function resolveProjectId(cred, fetcher = fetch, region = "cn-southwest-2") {
+  if (cred?.projectId) return cred.projectId
+  const url = "https://iam.myhuaweicloud.com/v3/auth/projects"
+  const headers = { "content-type": "application/json", "x-security-token": cred.securityToken }
+  const signed = signHuaweiRequest("GET", url, headers, "", cred.access, cred.secret)
+  const r = await fetcher(url, { headers: signed, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
+  if (!r.ok) throw new Error(`项目列表查询失败：HTTP ${r.status}`)
+  const j = await r.json()
+  const hit = (j.projects ?? []).find((p) => p.name === region && p.id)
+  return hit?.id ?? cred.projectId ?? ""
+}
+
+/** trial SKU 的 `product_sales_cycles[0].id`（下单要 `subscribe_atomic_product_id`）。 */
+export async function resolveTrialAtomicProductId(cred, fetcher = fetch) {
+  const url = `${CLAW_BASE}/v1/skus/${TRIAL_SKU_CODE}?is_query_sales_cycle=true&is_query_resource_rating=false`
+  const headers = { "content-type": "application/json", "x-security-token": cred.securityToken }
+  const signed = signHuaweiRequest("GET", url, headers, "", cred.access, cred.secret)
+  const r = await fetcher(url, { headers: signed, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
+  if (!r.ok) throw new Error(`trial SKU 查询失败：HTTP ${r.status}`)
+  const j = await r.json()
+  return j?.product_sales_cycles?.[0]?.id ?? ""
+}
+
+/**
+ * ⚠ **写操作**：给账号「免费开通」个人体验版（trial 套餐）。
+ *
+ * 这是套餐系统（订阅面 `/v1/subscription/period`），与
+ * `subscribeClientModelInfo()` 的模型网关（`/v1/claw/client-subscription`）**是两套**：
+ * 前者给 500 积分 + 200 次联网搜索（30 天），后者只给 model_app_key。
+ *
+ * 真机实测（2026-10-31，181****6710）：真实调用返回 200
+ * `{order_id:"1566095057919791104", status:"PAYING", cbc_order_id:"CS2610311422V9YBR"}`，
+ * 约 5 秒后 `GET /v1/subscription` 出现
+ * `skus=[{sku_code:"officeace.personal.package.trial", quotas:[officeace_points:500, online_search_count:200]}]`
+ * —— 免费单自动支付，无需再调支付接口。
+ *
+ * 本函数**没有接进任何自动流程**：需要显式调用（是否自动领取由上层决定）。
+ */
+export async function claimTrialPackage(cred, opts = {}) {
+  const fetcher = opts.fetcher ?? fetch
+  const projectId = opts.projectId ?? (await resolveProjectId(cred, fetcher))
+  const atomicProductId = opts.atomicProductId ?? (await resolveTrialAtomicProductId(cred, fetcher))
+  if (!projectId) return { ok: false, status: 0, detail: "没有拿到 project_id" }
+  if (!atomicProductId) return { ok: false, status: 0, detail: "没有拿到 trial SKU 的 atomicProductId" }
+
+  const url = `${CLAW_BASE}/v1/subscription/period`
+  const body = JSON.stringify(trialOrderBody({ atomicProductId, periodType: 2, periodValue: 1 }))
+  const headers = {
+    "content-type": "application/json;charset=utf8",
+    "x-security-token": cred.securityToken,
+    "x-project-id": projectId,
+  }
   let r
   try {
-    // signV11Request 自己发请求，返回 {ok,status,text}
-    r = await request(url, cred, "POST", body)
+    const signed = signHuaweiRequest("POST", url, headers, body, cred.access, cred.secret)
+    r = await fetcher(url, { method: "POST", headers: signed, body, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
   } catch (e) {
     return { ok: false, status: 0, detail: String(e?.message ?? e).slice(0, 200) }
   }
-  if (!r?.ok) {
-    return { ok: false, status: r?.status ?? 0, detail: String(r?.text ?? "").trim().slice(0, 300) }
-  }
+  const text = await r.text().catch(() => "")
+  if (!r.ok) return { ok: false, status: r.status, detail: text.trim().slice(0, 300) }
   let j = null
   try {
-    j = JSON.parse(r.text)
+    j = JSON.parse(text)
   } catch {}
-  return { ok: true, status: r.status, orderId: j?.order_id ?? null, raw: j }
+  return {
+    ok: true,
+    status: r.status,
+    orderId: j?.order_id ?? null,
+    cbcOrderId: j?.cbc_order_id ?? null,
+    orderStatus: j?.status ?? null,
+    raw: j,
+  }
 }
 
 // ── 签到 ──────────────────────────────────────────────────────────
