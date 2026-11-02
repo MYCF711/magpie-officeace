@@ -2578,7 +2578,7 @@ async function officeAceAuthRecord(overrides = {}, identity = "iam::d1:user:hw1"
     codeVerifier: "verifier",
     dpopPrivateJwk: keyPair.privateKeyJwk,
     accountId: "01a1642ad2ae7f93bf6387ad2fc5f09e",
-    user_phone: "189****8051",
+    user_phone: "138****8000",
     ...overrides,
   }
   return {
@@ -2588,7 +2588,7 @@ async function officeAceAuthRecord(overrides = {}, identity = "iam::d1:user:hw1"
       access: JSON.stringify(credential),
       refresh,
       expires: Date.parse("2031-01-01T00:00:00Z"),
-      accountId: "189****8051",
+      accountId: "138****8000",
       uid: identity,
     },
   }

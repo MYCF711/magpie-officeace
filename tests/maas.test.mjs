@@ -166,7 +166,7 @@ const pendingCred = (extra = {}) => ({
   expiresAt: "2031-01-01T00:00:00Z",
   refreshToken: "RT-KEEP",
   accountId: "01a1642ad2ae7f93bf6387ad2fc5f09e",
-  user_phone: "189****8051",
+  user_phone: "138****8000",
   ...extra,
 })
 
@@ -225,7 +225,7 @@ test("单入口 · 没开通：开控制台 + 轮询，回写同一份凭据", a
   const written = JSON.parse(out.access)
   assert.equal(written.modelAppKey, "app-key", "把检测到的 MaaS 凭据合并进同一份记录")
   assert.equal(written.refreshToken, "RT-KEEP", "没有换 token：还是原来那份登录态")
-  assert.equal(written.user_phone, "189****8051", "手机号保留")
+  assert.equal(written.user_phone, "138****8000", "手机号保留")
   assert.ok(calls.length >= 3, "轮询到开通为止")
   _internal.maasPending.clear()
 })
@@ -428,7 +428,7 @@ async function storedOfficeAceRecord(overrides = {}) {
     refreshToken: "RT-DISK",
     dpopPrivateJwk: privateJwk,
     accountId: "01a1642ad2ae7f93bf6387ad2fc5f09e",
-    user_phone: "189****8051",
+    user_phone: "138****8000",
     ...overrides,
   }
   return {

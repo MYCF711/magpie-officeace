@@ -21,7 +21,7 @@
 - **模型别名去重**：CodeArts 的 agent 列表同时给出 `deepseek-v4.1-flash` 与 `deepseek-v4.1-flash-1017`（同一模型、同名同倍率），以前两条都列。现在按 `normalizeModelId` 的基名去重：账号 benefit/注册 id 优先，否则保留裸 id —— 实测该账号 10 → 9 条。
 - **可读的账号名**：`codearts` 的 `usage().user` 有手机号就显示打码手机号，否则显示 accountId 尾 6 位（`…e6a47f`），不再出现完整 `iam::…`；`officeace` 同样加了尾 6 位兜底。
 - **插件自动更新**：magpie 只自动更新 `@magpie-community/*`；本包复刻 `magicrew` 的 `src/auto-maintenance.mjs` —— 读 `plugin-updates.json` 的 `waiting`，调 `magpie plugin update`，成功后补 `updated[]`（「已自动更新」徽章读它）。找不到 magpie exe 时静默记 `no-magpie-exe`。
-- **核实「officeace 模型 14 → 7」不是回退**：`src/models.mjs` 自 0.1.20 起未变；同一台机器、同一账号 189****8051，装 0.1.26 与 0.2.0 跑 `magpie plugin list` 都是 **7 models**。7 是设计值（`/v1/model-token-rates` 白名单 ∩ `/v2/models` 目录，README 与 internals 都写 7）。14 只可能是旧构建/旧缓存（静态表 10 ∪ 实时 7 去重后正好 14），不是本次合并引入的。
+- **核实「officeace 模型 14 → 7」不是回退**：`src/models.mjs` 自 0.1.20 起未变；同一台机器、同一账号 138****8000，装 0.1.26 与 0.2.0 跑 `magpie plugin list` 都是 **7 models**。7 是设计值（`/v1/model-token-rates` 白名单 ∩ `/v2/models` 目录，README 与 internals 都写 7）。14 只可能是旧构建/旧缓存（静态表 10 ∪ 实时 7 去重后正好 14），不是本次合并引入的。
 
 ## 0.2.0 — 2026-10-31
 
@@ -88,7 +88,7 @@
 ## 0.1.14 — 2026-10-29
 
 - **修复：卡片上的账号名是一串 domain id（`01a1642ad2ae7f93bf6387ad2fc5f09e`），不是手机号** —— 华为云 OAuth 的 `refresh_token` 里 `user_profile` 只有 IAM 自己的 id，**从来没有手机号**；`toStored()` 又把 `cred.accountId`（domain id）当卡片名。三个账号并排时是三串看不懂的 ID，用户以为是乱码
-- **登录后读一次手机号**（`src/phone.mjs`）：`GET https://iam.cn-north-4.myhuaweicloud.com/v3.0/OS-USER/users/{principal_id}`，用同一套 STS 三元组走 SDK-HMAC-SHA256，返回 `user.phone`（实测 `0086-18970098051`；同路径 `/v3.1/` 是 `APIGW.0101`，只有 `/v3.0/` 通）。打码成 `189****8051` 存进凭据 `user_phone`，每个 IAM 用户每进程读一次
+- **登录后读一次手机号**（`src/phone.mjs`）：`GET https://iam.cn-north-4.myhuaweicloud.com/v3.0/OS-USER/users/{principal_id}`，用同一套 STS 三元组走 SDK-HMAC-SHA256，返回 `user.phone`（实测 `0086-<PHONE>`；同路径 `/v3.1/` 是 `APIGW.0101`，只有 `/v3.0/` 通）。打码成 `138****8000` 存进凭据 `user_phone`，每个 IAM 用户每进程读一次
 - **`accountId` = 手机号，`uid` = domain id** —— 名字给人看、身份给宿主去重；取不到手机号就回落到 domain id，**绝不编造、也不影响登录**
 - 续期路径同样补取（老的已登录账号在下一次续期时改名），凭据形状只多一个可选字段 `user_phone`
 - 新增 `tests/phone.test.mjs`（5 组 18 条断言，`npm test` 18 通过）：打码边界、JWT claim、IAM 读取与缓存、失败回落、名字/身份分离
