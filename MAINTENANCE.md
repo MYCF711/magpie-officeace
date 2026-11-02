@@ -79,7 +79,7 @@ plugin:officeace → 138****8000 / 138****8000 / 138****8000
 ## 六、交付自检
 
 ```bash
-node "D:/主工作区/projects/magpie-plugin-scaffold/scripts/check.mjs" .
+node "<WORKSPACE>/projects/magpie-plugin-scaffold/scripts/check.mjs" .
 npm pack --dry-run
 # 测试：见 package.json 的 scripts 与 tests/
 ```

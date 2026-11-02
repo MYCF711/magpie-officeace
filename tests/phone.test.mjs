@@ -34,7 +34,7 @@ function cred(extra = {}) {
 
 test("maskPhone：0086- / +86 / 裸号 / 已打码，一律 3+4", () => {
   assert.equal(maskPhone("0086-13800138000"), "138****8000")
-  assert.equal(maskPhone("+86 189 7009 8051"), "138****8000")
+  assert.equal(maskPhone("+86 138 0013 8000"), "138****8000")
   assert.equal(maskPhone("13800138000"), "138****8000")
   // 已经打码的值不能被二次破坏
   assert.equal(maskPhone("138****8000"), "138****8000")
