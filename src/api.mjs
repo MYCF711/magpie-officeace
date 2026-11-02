@@ -293,7 +293,7 @@ export function trialOrderBody(cloudMeta = {}) {
  * `subscribeClientModelInfo()` 的模型网关（`/v1/claw/client-subscription`）**是两套**：
  * 前者给 500 积分 + 200 次联网搜索（30 天），后者只给 model_app_key。
  *
- * 2026-10-31 只读到的事实：181****0632 的该 SKU 生效时间 `2026-10-31T03:47:41Z`、
+ * 2026-10-31 只读到的事实：138****8000 的该 SKU 生效时间 `2026-10-31T03:47:41Z`、
  * 有效期 30 天 —— 说明它是在客户端订阅页点「免费开通」那一刻才创建的，不是注册自动发。
  *
  * 本函数**没有接进任何自动流程**：需要显式调用（是否要自动领取由上层决定）。
@@ -329,7 +329,7 @@ export async function resolveTrialAtomicProductId(cred, fetcher = fetch) {
  * `subscribeClientModelInfo()` 的模型网关（`/v1/claw/client-subscription`）**是两套**：
  * 前者给 500 积分 + 200 次联网搜索（30 天），后者只给 model_app_key。
  *
- * 真机实测（2026-10-31，181****6710）：真实调用返回 200
+ * 真机实测（2026-10-31，138****8000）：真实调用返回 200
  * `{order_id:"1566095057919791104", status:"PAYING", cbc_order_id:"CS2610311422V9YBR"}`，
  * 约 5 秒后 `GET /v1/subscription` 出现
  * `skus=[{sku_code:"officeace.personal.package.trial", quotas:[officeace_points:500, online_search_count:200]}]`

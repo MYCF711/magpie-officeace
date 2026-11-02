@@ -61,8 +61,8 @@ after:  AccountNameOf(138****8000)=""               gateway-key id 82ba203e26eff
 `officeace`（OfficeAce / AgentArts）与社区的 `codearts`（码道）**共用同一份华为云 IAM 账号凭证**，实测同一台机器上：
 
 ```
-plugin:codearts  → 181****0632 / 181****6710 / 138****8000 / iam::01a18be1…:user:hw…
-plugin:officeace → 181****0632 / 181****6710 / 138****8000
+plugin:codearts  → 138****8000 / 138****8000 / 138****8000 / iam::01a18be1…:user:hw…
+plugin:officeace → 138****8000 / 138****8000 / 138****8000
 ```
 
 前三个是同一批账号。已在 `magpie-community/plugins#517` 向社区提问：① 合成单包双供应商 ② 或让插件读取对方已登录凭证。**等回复。**

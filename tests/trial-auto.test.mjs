@@ -12,7 +12,7 @@ const cred = {
   secret: "9hefA4eK2KTT",
   securityToken: "hQpjbi1ub3J0",
   expiresAt: new Date(Date.now() + 3600_000).toISOString(),
-  user_phone: "181****6710",
+  user_phone: "138****8000",
 }
 
 const trialSku = {

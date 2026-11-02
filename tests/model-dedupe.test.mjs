@@ -24,7 +24,7 @@ test("dedupeAliases：不同模型不受影响", () => {
 })
 
 test("shortAccountName / shortUserName：手机号优先，URN 只留尾 6 位", () => {
-  assert.equal(C.shortAccountName({ user_phone: "181****0632" }), "181****0632")
+  assert.equal(C.shortAccountName({ user_phone: "138****8000" }), "138****8000")
   assert.match(C.shortAccountName({ accountId: "01a18be16b297c5197d8569e4be6a47f" }), /…e6a47f$/)
   assert.equal(C.shortAccountName({ accountId: "iam::01a18be16b297c5197d8569e4be6a47f" }), "…e6a47f")
   assert.equal(O.shortUserName({ accountId: "01a18be16b297c5197d8569e4be6a47f" }), "…e6a47f")

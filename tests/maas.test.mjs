@@ -85,7 +85,7 @@ test("usage：有 modelAppKey 的账号两个字段都不给", async () => {
 
 test("authorize：OfficeAce 客户端已登录且账号在 magpie 里 → 不开登录页，直接成功", async () => {
   const authFile = writeAuthFile(tempAuthFile(), {
-    officeace: record({ ...withMaas, accountId: "acc-1", user_phone: "181****0632", expiresAt: new Date(Date.now() + 3600_000).toISOString() }),
+    officeace: record({ ...withMaas, accountId: "acc-1", user_phone: "138****8000", expiresAt: new Date(Date.now() + 3600_000).toISOString() }),
   })
   let beganLogin = false
   const plugin = await OfficeAceAuthPlugin(
@@ -330,7 +330,7 @@ test("单入口 · 没开通时先起受控浏览器：opened=true，回退时�
 
 // ---- 旧记录补全：只有 STS、没有 modelAppKey → 向云端补 model_info -----------
 
-/** 权限接口回一套完整 model_info（真实形状，2026-10-31 实测 181****0632）。 */
+/** 权限接口回一套完整 model_info（真实形状，2026-10-31 实测 138****8000）。 */
 function grantedFetch() {
   const calls = []
   const fetcher = async (url) => {

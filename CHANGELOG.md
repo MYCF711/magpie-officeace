@@ -29,23 +29,23 @@
 
 ## 0.1.26 — 2026-10-31
 
-- **新增：缺「个人体验版」时自动免费开通** —— `usage()`（首次读额度）与 `authorize()`（登录后/复用客户端登录态时）会检查 `GET /v1/subscription` 的 `skus`：只有明确没有 `officeace.personal.package.trial`（或该条已过期）时，才调 `POST {CLAW_BASE}/v1/subscription/period` 下单（免费 0 元、MONTH×1、auto_pay:1）。每个账号每进程只尝试一次（失败不重试，结果缓存在内存）；下单前后各重读 skus 确认。真机实测（181****6710）：下单 200 `{status:"PAYING"}`，约 5 秒后 `subscribe_status=SUBSCRIBED`、`skus` 出现 `个人体验版`（500 分 + 200 次联网搜索/30 天），`usage()` 显示「个人体验版 · 剩 500 / 新用户福利 4000 / 签到 100」——与 4000 福利不冲突。`loader()`/chat 不触发写操作。
+- **新增：缺「个人体验版」时自动免费开通** —— `usage()`（首次读额度）与 `authorize()`（登录后/复用客户端登录态时）会检查 `GET /v1/subscription` 的 `skus`：只有明确没有 `officeace.personal.package.trial`（或该条已过期）时，才调 `POST {CLAW_BASE}/v1/subscription/period` 下单（免费 0 元、MONTH×1、auto_pay:1）。每个账号每进程只尝试一次（失败不重试，结果缓存在内存）；下单前后各重读 skus 确认。真机实测（138****8000）：下单 200 `{status:"PAYING"}`，约 5 秒后 `subscribe_status=SUBSCRIBED`、`skus` 出现 `个人体验版`（500 分 + 200 次联网搜索/30 天），`usage()` 显示「个人体验版 · 剩 500 / 新用户福利 4000 / 签到 100」——与 4000 福利不冲突。`loader()`/chat 不触发写操作。
 
 ## 0.1.25 — 2026-10-31
 
-- **新增：自动接入模型（登录即得 MaaS key）** —— 登录/加载账号时如果 `client-permission-validate` 没有 `model_info`，插件自动调 `POST {CLAW_BASE}/v1/claw/client-subscription`（`x-subscription-type: v2`、V11 签名、body `{}`，与 OfficeAce 客户端登录后「开通」按钮同一个端点）拿到 `model_info.model_auth_info`，写回账号 —— 不需要打开 OfficeAce 客户端 UI。真机实测：181****6710 / 180****2361 / 187****5670 三个原本「未接入 MaaS」的账号自动接入后，`client-permission-validate` 均返回 model_app_key，网关 `/v2/models` 均 200（25 个模型）；插件 `usage()` 不再标「未接入 MaaS」，`models` 含 deepseek-v4.1-flash。
+- **新增：自动接入模型（登录即得 MaaS key）** —— 登录/加载账号时如果 `client-permission-validate` 没有 `model_info`，插件自动调 `POST {CLAW_BASE}/v1/claw/client-subscription`（`x-subscription-type: v2`、V11 签名、body `{}`，与 OfficeAce 客户端登录后「开通」按钮同一个端点）拿到 `model_info.model_auth_info`，写回账号 —— 不需要打开 OfficeAce 客户端 UI。真机实测：138****8000 / 180****2361 / 187****5670 三个原本「未接入 MaaS」的账号自动接入后，`client-permission-validate` 均返回 model_app_key，网关 `/v2/models` 均 200（25 个模型）；插件 `usage()` 不再标「未接入 MaaS」，`models` 含 deepseek-v4.1-flash。
 
 ## 0.1.24 — 2026-10-31
 
-- **新增：复用 OfficeAce 客户端登录态** —— 点「重新登录」时先读 `~/.office-claw/session.cookie`（DPAPI，只读）拿 `oc_sid`，请求本地 `https://127.0.0.1:3003/api/islogin` 判断客户端当前登录的账号；若 magpie 里已有该 `account_id` 的凭据，就直接完成登录 —— **不打开任何登录页**。客户端没开/没登录/账号不匹配才回退华为云 OAuth。实测：客户端登录的是 181****0632，`authorize()` 约 2 秒返回 `opened:true`、`url:`、说明「已复用 OfficeAce 客户端的登录态（181****0632），无需再次登录」，callback 直接 success。另查：leveldb 的 `office-claw-sessionId` 是过期 Bearer（401），当前 `sessionId` 只能调本地 `/api/messages` 会话协议（非 OpenAI 兼容），聊天直连未采用。
+- **新增：复用 OfficeAce 客户端登录态** —— 点「重新登录」时先读 `~/.office-claw/session.cookie`（DPAPI，只读）拿 `oc_sid`，请求本地 `https://127.0.0.1:3003/api/islogin` 判断客户端当前登录的账号；若 magpie 里已有该 `account_id` 的凭据，就直接完成登录 —— **不打开任何登录页**。客户端没开/没登录/账号不匹配才回退华为云 OAuth。实测：客户端登录的是 138****8000，`authorize()` 约 2 秒返回 `opened:true`、`url:`、说明「已复用 OfficeAce 客户端的登录态（138****8000），无需再次登录」，callback 直接 success。另查：leveldb 的 `office-claw-sessionId` 是过期 Bearer（401），当前 `sessionId` 只能调本地 `/api/messages` 会话协议（非 OpenAI 兼容），聊天直连未采用。
 
 ## 0.1.23 — 2026-10-31
 
-- **修复：缺 modelAppKey 时不再误标「已退出登录」** —— 以前 `usage()` 在 `maasMissing` 时返回 `signIn: "expired"`，magpie 于是显示「已退出登录 — 请在此账号上选择重新登录」，但这些账号的 STS 凭据是好的（额度、签到正常），只是云端没下发 model_info（例如 181****6710 / 180****2361 / 187****5670）。现在只标 `plan: "未接入 MaaS"`，并说明「用这个账号打开一次 OfficeAce 客户端接入模型」；只有 refresh_token 真失效才要求重新登录。另：旧记录补全现在会对四个号逐个验证（181****0632 云端有 model_info → 自动恢复可用；其余三个云端确实没有，如实显示）
+- **修复：缺 modelAppKey 时不再误标「已退出登录」** —— 以前 `usage()` 在 `maasMissing` 时返回 `signIn: "expired"`，magpie 于是显示「已退出登录 — 请在此账号上选择重新登录」，但这些账号的 STS 凭据是好的（额度、签到正常），只是云端没下发 model_info（例如 138****8000 / 180****2361 / 187****5670）。现在只标 `plan: "未接入 MaaS"`，并说明「用这个账号打开一次 OfficeAce 客户端接入模型」；只有 refresh_token 真失效才要求重新登录。另：旧记录补全现在会对四个号逐个验证（138****8000 云端有 model_info → 自动恢复可用；其余三个云端确实没有，如实显示）
 
 ## 0.1.22 — 2026-10-31
 
-- **修复：老记录不再被误判「未接入 MaaS」** —— 旧版插件写的记录可能只有 STS、没有 `modelAppKey`（例如 181****0632），但云端 `GET /v1/claw/client-permission-validate` 其实已经返回了 `model_info.model_auth_info`（`modelgw-*.officeace...` 网关的 Basic 凭据）。现在 `usage()` / `loader()` / `models()` / chat 检测到缺字段会先向云端补一次（按账号缓存 6 小时），补到就直接用 —— **登录完就能用 deepseek-v4.1-flash 等模型，不需要去 MaaS 控制台创建 API Key**。实测：181****0632 的旧记录补全后 `usage → 个人体验版（3 个额度桶）`、`models → 7 个（含 deepseek-v4.1-flash）`
+- **修复：老记录不再被误判「未接入 MaaS」** —— 旧版插件写的记录可能只有 STS、没有 `modelAppKey`（例如 138****8000），但云端 `GET /v1/claw/client-permission-validate` 其实已经返回了 `model_info.model_auth_info`（`modelgw-*.officeace...` 网关的 Basic 凭据）。现在 `usage()` / `loader()` / `models()` / chat 检测到缺字段会先向云端补一次（按账号缓存 6 小时），补到就直接用 —— **登录完就能用 deepseek-v4.1-flash 等模型，不需要去 MaaS 控制台创建 API Key**。实测：138****8000 的旧记录补全后 `usage → 个人体验版（3 个额度桶）`、`models → 7 个（含 deepseek-v4.1-flash）`
 
 ## 0.1.21 — 2026-10-31
 

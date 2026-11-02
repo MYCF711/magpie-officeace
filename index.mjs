@@ -183,7 +183,7 @@ function noteMaasPending(cred) {
  * （`GET /v1/claw/client-permission-validate` 回 `model_auth_info` + `model_api_url_base`）。
  *
  * 以前 loader/usage/models 只看存储里的字段，于是「登录完就能用模型」的账号
- * （比如 181****0632）被误判成「未接入 MaaS」，还要用户去 MaaS 控制台建 key ——
+ * （比如 138****8000）被误判成「未接入 MaaS」，还要用户去 MaaS 控制台建 key ——
  * 而 OfficeAce 自己的模型网关（`modelgw-*.officeace...`）根本不需要那个 key。
  *
  * 读一次补上，按账号缓存 6 小时（失败不缓存，下次还会试）。
