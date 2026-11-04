@@ -27,7 +27,7 @@
 
 import { createHash, createHmac, randomBytes, webcrypto } from "node:crypto"
 
-import { REGION, REQUEST_TIMEOUT_MS, SERVICE } from "./constants.mjs"
+import { REGION, REQUEST_TIMEOUT_MS, SERVICE, UA } from "./constants.mjs"
 
 // ── 工具 ──────────────────────────────────────────────────────────
 
@@ -160,6 +160,10 @@ export function signHuaweiRequest(method, url, headers, bodyText, accessKey, sec
   return {
     ...headers,
     "X-Sdk-Date": xdate,
+    // 出站 UA 只从 constants.mjs 取（两个 provider 共用一条）。**故意不参与签名**：
+    // signedHeaders 上面已经算完了，加在这里等于「随请求发出去、但不在 SignedHeaders 里」，
+    // 签名串与线上已跑通的形态逐字节一致 —— 别把它挪到 lower/signedHeaders 里。
+    "User-Agent": UA,
     Authorization: `SDK-HMAC-SHA256 Access=${accessKey}, SignedHeaders=${signedHeaders.join(";")}, Signature=${sig}`,
   }
 }
@@ -245,6 +249,8 @@ export async function signV11Request(url, credential, method = "GET", body) {
       method,
       headers: {
         ...original,
+        // 同上：不在 SignedHeaders 里，随请求发出去但不进签名串。
+        "User-Agent": UA,
         Authorization: `V11-HMAC-SHA256 Credential=${credential.access}/${scope}, SignedHeaders=${signedHeaders.join(";")}, Signature=${signature}`,
       },
       ...(body === undefined ? {} : { body }),

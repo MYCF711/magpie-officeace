@@ -62,6 +62,7 @@ curl -s "https://usemagpie.ai/api/latest?channel=stable" | grep -o '"version":"[
 | 12 | `magpie plugin add xxx.tgz` 报 `exports no OpenCode plugin function` | 这个命令把 tgz 当 JS 模块 `import()`，**用不了**；本地包要走 `plugins.json` + `plugins/package.json` 登记 | README 安装段 |
 | 13 | 改了代码重装，行为没变 | 同版本号重打包会命中 bun 缓存 —— 必须 bump `version` | 脚手架 UPDATING 第 1 步 |
 | 14 | 想让卡片标题 / 许可 / 「源码」按钮对，去改了 magpie 的缓存 | 插件对 magpie 目录**只有读的份**；唯一载体是 `registry-entry.json` | internals 卡片标题 |
+| 15 | **上游偶发或固定回 403 `TM.00000001`（文案是「网络繁忙，请稍后重试」），重试和换账号都没用**；或者某个 provider 换到新网络 / 新账号后就不通 | 每个打上游的 `fetch` 都**显式**带 `User-Agent`，值是**该服务官方客户端**的 UA —— 绝不写 `<包名>/<版本号>`，也绝不让宿主的 `magpie/<version>` 透传（插件不设 UA 时它就这么上去）。官方是网页就用完整 Chrome UA；有 App / CLI 客户端就用那个客户端的 UA。判据：`node scripts/check-ua.mjs` 退出 0（模板坑表第 38 条） | README「3. User-Agent 常常是硬校验」· `scripts/check-ua.mjs` |
 
 ---
 

@@ -23,7 +23,7 @@
 //
 // ═══════════════════════════════════════════════════════════════════
 
-import { CHAT_PATH, REQUEST_TIMEOUT_MS, maasBase } from "./constants.mjs"
+import { CHAT_PATH, REQUEST_TIMEOUT_MS, UA, maasBase } from "./constants.mjs"
 import {
   basicAuthFingerprint,
   expiryMs,
@@ -84,6 +84,9 @@ export async function chatFetch({ input, init, credential, renew }) {
         "content-type": "application/json",
         // ⚠ MaaS 用 Basic，不是 Bearer
         authorization: basicAuthorization(cred),
+        // 出站 UA 的唯一来源（src/constants.mjs）。不写就透传宿主的 magpie/<version>，
+        // 网关按 <产品名>/<版本> 判成第三方客户端 ⇒ 403 TM.00000001。
+        "User-Agent": UA,
       },
       body,
       signal,

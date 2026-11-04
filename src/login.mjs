@@ -42,6 +42,7 @@ import {
   REDIRECT_URI,
   STATE_PATH,
   TOKEN_URL,
+  UA,
 } from "./constants.mjs"
 
 import { generateDpopKeyPair, importDpopKey, signDpop, signHuaweiRequest } from "./crypto.mjs"
@@ -52,7 +53,7 @@ import { subscribeClientModelInfo } from "./maas.mjs"
 async function registerState() {
   const r = await fetch(`${CLAW_BASE}${STATE_PATH}`, {
     method: "POST",
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", "User-Agent": UA },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   if (!r.ok) {
@@ -70,7 +71,7 @@ async function registerState() {
 
 async function pollCode(state) {
   const r = await fetch(`${CLAW_BASE}${CODE_PATH}?state=${encodeURIComponent(state)}`, {
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", "User-Agent": UA },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   if (!r.ok) return null
@@ -101,7 +102,7 @@ async function exchangeToken(code, codeVerifier, dpopPrivateJwk) {
 
   const r = await fetch(TOKEN_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", DPoP: dpopJwt },
+    headers: { "Content-Type": "application/x-www-form-urlencoded", DPoP: dpopJwt, "User-Agent": UA },
     body: body.toString(),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
@@ -251,7 +252,7 @@ async function doRefresh(current, persist) {
 
   const r = await fetch(TOKEN_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", DPoP: dpopJwt },
+    headers: { "Content-Type": "application/x-www-form-urlencoded", DPoP: dpopJwt, "User-Agent": UA },
     body: new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: current.refreshToken,

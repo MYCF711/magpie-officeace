@@ -23,6 +23,7 @@ import {
   SUBSCRIPTION_PATH,
   TOKEN_RATES_PATH,
   TOKEN_RATES_TTL_MS,
+  UA,
   maasBase,
 } from "./constants.mjs"
 
@@ -112,7 +113,7 @@ export async function fetchTokenRates(cred) {
  */
 export async function fetchCatalog(cred) {
   const r = await fetch(`${maasBase(cred)}${MODELS_PATH}`, {
-    headers: { Accept: "application/json", Authorization: basicAuthorization(cred) },
+    headers: { Accept: "application/json", Authorization: basicAuthorization(cred), "User-Agent": UA },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   if (!r.ok) throw new Error(`OfficeAce 目录读取失败：HTTP ${r.status}`)

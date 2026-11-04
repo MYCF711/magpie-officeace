@@ -18,6 +18,27 @@
 /** 登录与权限校验域 */
 export const CLAW_BASE = "https://agentarts.cn-southwest-2.myhuaweicloud.com"
 
+/**
+ * 出站 User-Agent —— **全仓库唯一的那一条**，officeace 与 codearts 两个 provider 共用。
+ *
+ * 为什么必须有：magpie 给插件宿主的 UA 固定是 `magpie/<version>`；插件不显式覆盖
+ * 就原样透传，而上游网关按 `<产品名>/<版本>` 形态识别第三方客户端，命中即回
+ *   403 {"error_code":"TM.00000001","error_msg":"网络繁忙，请稍后重试"}
+ * （codearts 的 snap-access 网关就是这套腾讯式错误码）。所以：
+ *   · 禁止 `magpie/…`、`magpie-officeace/…` 这类我们自己的名字；
+ *   · 禁止 `node` / `Bun/…` / `undici` 这类运行时默认 UA；
+ *   · 也禁止把宿主的 UA 透传出去（见 src/codearts/index.mjs 的 signFor）。
+ *
+ * 取值与证据等级（务实取舍，别当成「抓到的官方 UA」）：
+ *   这套接口是华为云 AK/SK 签名的 OpenAPI（`SDK-HMAC-SHA256` / `V11-HMAC-SHA256`），
+ *   官方客户端 UA 形态**未在任何抓包 / 文档 / 测试夹具里出现过**，本仓库里也没有。
+ *   调用它的真实客户端是网页控制台（OfficeAce / CodeArts 控制台），所以按「网页形态」
+ *   取完整 Chrome UA —— 与规则里「官方是网页就用完整 Chrome UA」一致。
+ *   真机结论见 docs/internals.md 的「出站 UA」一节（改完打上游 200）。
+ */
+export const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+  + "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
 /** 华为云 STS token 交换 */
 export const TOKEN_URL = "https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens"
 

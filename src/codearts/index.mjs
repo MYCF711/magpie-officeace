@@ -48,6 +48,9 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
+// 出站 UA 的唯一来源（officeace 与 codearts 共用一条），见 ../constants.mjs 的注释。
+import { UA } from "../constants.mjs"
+
 const PROVIDER = "codearts"
 
 // 码道 CodeArts 的方形标志（由 OfficeAce 客户端自带素材裁切，128×128 PNG）
@@ -1618,6 +1621,12 @@ async function signFor(cred, method, url, body, extraSigned) {
   signed.forEach((value, key) => {
     if (key !== "host") headers.set(key, value)
   })
+  // 出站 UA：signFor 是这一路唯一的出口（signedFetch / signedGet / snapRequest /
+  // traceQueueCall 全经过它），所以只放这一份。
+  // ⚠ 故意放在签名**之后**：signRequestHuawei 的 SignedHeaders 只含它自己那几项，
+  //   UA 随请求发出去但不进签名串 —— 签名与线上已跑通的形态逐字节一致。
+  // 值只从 ../constants.mjs 取（officeace 与 codearts 共用同一条）。
+  headers.set("user-agent", UA)
   return headers
 }
 
