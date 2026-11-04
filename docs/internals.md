@@ -95,6 +95,51 @@ token 到期前 **10 分钟**（`EXPIRY_LEAD_MS`）自动续期。
 
 ---
 
+## 出站 UA：只有一条，两个 provider 共用
+
+**为什么必须显式给**：链路是 DSH → magpie → 插件 host → 上游。magpie 给插件宿主的 UA
+固定是 `magpie/<version>`；插件不覆盖就原样透传，而上游网关按 `<产品名>/<版本>` 形态
+识别「第三方客户端」，命中即回
+
+```
+403 {"error_code":"TM.00000001","error_msg":"网络繁忙，请稍后重试"}
+```
+
+codearts 的 snap-access 网关（`snap-access.cn-north-4.myhuaweicloud.com`）就是这套
+腾讯式错误码；officeace 的 CLAW / 订阅面 / MaaS 三域同属一套边缘网关，同样按这个判。
+
+**取值**：`src/constants.mjs` 的 `UA`（完整 Chrome UA）。证据等级说明：
+
+| 候选 | 有没有证据 | 结论 |
+|---|---|---|
+| 仓库里抓到的官方客户端 UA | **没有**。docs / 测试夹具 / 常量里都没有 UA 形态 | 用不了 |
+| 华为云 SDK 名当 token（`SDK-HMAC-SHA256` 之类） | 那是**签名算法名**，不是客户端 UA | 不适用 |
+| 完整 Chrome UA | 官方网页控制台（OfficeAce / CodeArts 控制台）就是网页客户端，规则里「官方是网页就用完整 Chrome UA」 | **采用**（等级 B：形态推理 + 真机 200） |
+
+**签名与 UA 的关系（改这块前必看）**：UA **不参与签名**。
+`signHuaweiRequest` / `signRequestHuawei` 只签它们自己那几项
+（`host;x-sdk-date;…`），`signV11Request` 只签 `x-subscription-type` /
+`x-sdk-date` / `x-security-token` / `host`（+`content-type` / `x-project-id`）。
+UA 一律在签名算完之后 `set` 进去 —— 这样 `SignedHeaders` 与线上已跑通的形态逐字节一致，
+只是多带一个不参与校验的头。判据：`node --test tests/ua.test.mjs`
+（断言 `SignedHeaders` 里没有 `user-agent`）。
+
+**出站点清单（全部引用同一条常量）**：
+
+| 文件 | 位置 | 用途 |
+|---|---|---|
+| `src/crypto.mjs` | `signHuaweiRequest` 返回值 | CLAW 权限校验 / 组织 / 订阅（maas.mjs、login.mjs 都吃它）|
+| `src/crypto.mjs` | `signV11Request` 的 fetch | 额度 / 签到 / 倍率 |
+| `src/login.mjs` | `registerState` / `pollCode` / `exchangeToken` / `doRefresh` | OAuth 与 STS 换 token |
+| `src/api.mjs` | `fetchCatalog` | MaaS 模型目录 |
+| `src/chat.mjs` | `chatFetch` | MaaS 对话（真正跑模型那条）|
+| `src/codearts/index.mjs` | `signFor`（唯一签名出口）| snap-access / opengw / queue 轮询 |
+
+`src/console-browser.mjs` 里打 `127.0.0.1` 的 CDP（`/json/list` 与 WebSocket）是本机
+浏览器，不出网，不需要 UA。
+
+---
+
 ## 模型：26 / 9 / 7
 
 三个数字，别混：
