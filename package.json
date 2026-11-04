@@ -1,13 +1,14 @@
 {
   "name": "magpie-officeace",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Huawei Cloud for magpie: OfficeAce (果办) and CodeArts (码道) in one package — OAuth sign-in, live model catalog, credit windows and daily check-in where the product supports it.",
   "type": "module",
   "main": "./index.mjs",
   "exports": "./index.mjs",
   "scripts": {
     "publish:npm": "node publish-npm.mjs",
-    "test": "node --test \"tests/*.test.mjs\""
+    "test": "node --test \"tests/*.test.mjs\"",
+    "check:ua": "node scripts/check-ua.mjs ."
   },
   "files": [
     "AGENTS.md",
