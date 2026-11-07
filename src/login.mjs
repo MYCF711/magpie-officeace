@@ -250,13 +250,24 @@ async function doRefresh(current, persist) {
   }
   const dpopJwt = await signDpop(privateKey, publicJwk, "POST", TOKEN_URL)
 
+  // 合并版 CodeArts 登录也会写入果办记录，续期必须沿用签发时的 client。
+  // 未带标记的历史果办记录仍使用原来的 AgentArts client。
+  const oauthClient = current.oauth_client || current.oauthClient || CLIENT_ID
+  if (![CLIENT_ID, "codearts-agent"].includes(oauthClient)) {
+    throw new Error("OfficeAce 凭据的 OAuth client 不受支持，请重新登录")
+  }
+  const verifier = current.codeVerifier || current.code_verifier || ""
+  if (oauthClient === "codearts-agent" && !verifier) {
+    throw new Error("OfficeAce 的 CodeArts 凭据缺少 PKCE verifier，请重新登录")
+  }
   const r = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", DPoP: dpopJwt, "User-Agent": UA },
     body: new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: current.refreshToken,
-      client_id: CLIENT_ID,
+      client_id: oauthClient,
+      ...(oauthClient === "codearts-agent" ? { code_verifier: verifier } : {}),
     }).toString(),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
