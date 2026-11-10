@@ -331,7 +331,7 @@ export async function resolveTrialAtomicProductId(cred, fetcher = fetch) {
  * 前者给 500 积分 + 200 次联网搜索（30 天），后者只给 model_app_key。
  *
  * 真机实测（2026-10-31，138****8000）：真实调用返回 200
- * `{order_id:"1566095057919791104", status:"PAYING", cbc_order_id:"CS2610311422V9YBR"}`，
+ * `{order_id:"0000000000000000000", status:"PAYING", cbc_order_id:"CS0000000000000000"}`，
  * 约 5 秒后 `GET /v1/subscription` 出现
  * `skus=[{sku_code:"officeace.personal.package.trial", quotas:[officeace_points:500, online_search_count:200]}]`
  * —— 免费单自动支付，无需再调支付接口。

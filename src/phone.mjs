@@ -6,7 +6,7 @@
 //
 // 华为云 OAuth 的 refresh_token 是 JWT，`user_profile` claim 里只有 IAM 自己的
 // id：`account_id` / `account_name` / `principal_id` / `principal_urn`，**没有手机号**。
-// 于是卡片只能显示 `01a1642ad2ae7f93bf6387ad2fc5f09e` 这种 domain id ——
+// 于是卡片只能显示 `0123456789abcdef0123456789abcdef` 这种 domain id ——
 // 在三个账号并排时，用户看到的就是三串「乱码」，分不清谁是谁。
 //
 // 手机号其实一步之遥：同一套 STS 三元组（SDK-HMAC-SHA256）就能读

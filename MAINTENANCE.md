@@ -26,7 +26,7 @@
 
 ```
 officeace → accountId = "138****8000"        ← 手机号
-codearts  → accountId = "iam::01a18be…:user:hw059194106570983"   ← URN（合规）
+codearts  → accountId = "iam::fedcba98…:user:hw000000000000000"   ← URN（合规）
 ```
 
 按 `magpie-community/plugins#483` 的裁定（yetone 原文）：
@@ -36,8 +36,8 @@ codearts  → accountId = "iam::01a18be…:user:hw059194106570983"   ← URN（�
 `accountId` 是 magpie 里这个账号的**身份键**：用户给它起的自定义名、proxy、gateway key 绑定全挂在上面。实测换名后的后果：
 
 ```
-before: AccountNameOf(01a0cbf7-…)="Work account"   gateway-key id 842c5f53982b63b7
-after:  AccountNameOf(138****8000)=""               gateway-key id 82ba203e26eff0ed
+before: AccountNameOf(00000000-…)="Work account"   gateway-key id 0000000000000000
+after:  AccountNameOf(138****8000)=""               gateway-key id 1111111111111111
 ```
 
 ⇒ officeace 现在显示手机号好看，代价是用户自定义名/proxy/gateway key 会在续期时被清掉。
@@ -61,7 +61,7 @@ after:  AccountNameOf(138****8000)=""               gateway-key id 82ba203e26eff
 `officeace`（OfficeAce / AgentArts）与社区的 `codearts`（码道）**共用同一份华为云 IAM 账号凭证**，实测同一台机器上：
 
 ```
-plugin:codearts  → 138****8000 / 138****8000 / 138****8000 / iam::01a18be1…:user:hw…
+plugin:codearts  → 138****8000 / 138****8000 / 138****8000 / iam::fedcba98…:user:hw…
 plugin:officeace → 138****8000 / 138****8000 / 138****8000
 ```
 

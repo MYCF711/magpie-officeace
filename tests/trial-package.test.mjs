@@ -13,9 +13,9 @@ import {
 } from "../src/api.mjs"
 
 const cred = {
-  access: "HSTAOZ3JN3WWYF3L",
-  secret: "9hefA4eK2KTT",
-  securityToken: "hQpjbi1ub3J0",
+  access: "AK-TEST-0001",
+  secret: "SK-TEST-0001",
+  securityToken: "ST-TEST-0001",
   projectId: "",
 }
 

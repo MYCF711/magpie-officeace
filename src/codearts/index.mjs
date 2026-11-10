@@ -2,7 +2,7 @@
 //
 // CodeArts, Huawei Cloud's coding agent (码道), serves its models over an
 // OpenAI-compatible Chat Completions API at
-// https://snap-access.cn-north-4.myhuaweicloud.com/api/v2 — but unlike a plain
+// https://snap-access.cn-north-4.myhuaweicloud.com/api/v1 — but unlike a plain
 // OpenAI-compatible provider it does NOT take an API key. Requests are signed
 // with临时 AK/SK/security-token credentials using Huawei's SDK-HMAC-SHA256
 // scheme, and those credentials are obtained by signing in to Huawei Cloud
@@ -62,7 +62,7 @@ const NPM = "@ai-sdk/openai-compatible" // chat completions
 
 // Chat Completions base (loader `baseURL`). A chat goes to
 // `${CHAT_API_BASE}/chat/completions`.
-const CHAT_API_BASE = "https://snap-access.cn-north-4.myhuaweicloud.com/api/v2"
+const CHAT_API_BASE = "https://snap-access.cn-north-4.myhuaweicloud.com/api/v1"
 // Snap-access manager host: model list, account/quota, check-in.
 const SNAP_HOST = "https://snap-access.cn-north-4.myhuaweicloud.com"
 const SNAP_MODEL_BUILTIN_URL = `${SNAP_HOST}/v1/model/builtin`

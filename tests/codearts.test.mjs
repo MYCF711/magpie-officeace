@@ -26,6 +26,22 @@ test.after(() => fs.rmSync(ledgerDir, { recursive: true, force: true }))
 
 const buf = (s) => new TextEncoder().encode(s)
 
+// ---- chat endpoint pin (anti-regression) -----------------------------------
+//
+// Fixed to the literal, NOT compared against another constant: the point is
+// that the production chat base is the v1 path. Measured against the live
+// gateway with the same account/model/signature: `POST …/api/v2/chat/
+// completions` answers 400 `InferHub.APIG.0101.404`, while `…/api/v1/chat/
+// completions` answers 200 (model=deepseek-v4.1-flash). A future edit that
+// silently swings the base back to v2 must turn this test red.
+test("CHAT_API_BASE is pinned to CodeArts' /api/v1 chat endpoint", () => {
+  assert.equal(
+    x.CHAT_API_BASE,
+    "https://snap-access.cn-north-4.myhuaweicloud.com/api/v1",
+    "CHAT_API_BASE must be …/api/v1: …/api/v2/chat/completions answers 400 InferHub.APIG.0101.404, …/api/v1 answers 200",
+  )
+})
+
 // ---- crypto primitives -----------------------------------------------------
 
 test("sha256Hex matches the known SHA-256 of the empty string", async () => {
@@ -757,7 +773,7 @@ test("plugin exposes config, provider.models, and an oauth auth method", async (
   assert.equal(p.models["glm-5.3-flash"].free, undefined)
 })
 
-const CHAT_URL = "https://snap-access.cn-north-4.myhuaweicloud.com/api/v2/chat/completions"
+const CHAT_URL = "https://snap-access.cn-north-4.myhuaweicloud.com/api/v1/chat/completions"
 const sse = (...events) => events.map((e) => `data: ${typeof e === "string" ? e : JSON.stringify(e)}\n\n`).join("")
 const sseResponse = (text) => new Response(text, { status: 200, headers: { "content-type": "text/event-stream" } })
 const chatInit = (body) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
@@ -1536,7 +1552,7 @@ test("isSignedHostUrl takes only https URLs on the two hosts the plugin calls, b
   assert.deepEqual([...x.SIGNED_HOSTS].sort(), ["opengw.developer.huaweicloud.com", "snap-access.cn-north-4.myhuaweicloud.com"])
   assert.equal(x.isSignedHostUrl(CHAT_URL), true)
   assert.equal(x.isSignedHostUrl(x.BENEFIT_CLAIM_URL), true)
-  assert.equal(x.isSignedHostUrl("https://SNAP-ACCESS.cn-north-4.myhuaweicloud.com/api/v2/chat/completions"), true, "a hostname has no case")
+  assert.equal(x.isSignedHostUrl("https://SNAP-ACCESS.cn-north-4.myhuaweicloud.com/api/v1/chat/completions"), true, "a hostname has no case")
   // Other Huawei Cloud hosts don't get the account's signature either.
   for (const other of ["https://codearts.huaweicloud.com/x", "https://iam.myhuaweicloud.cn/v3", "https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens", "https://snap-access.cn-south-1.myhuaweicloud.com/api"]) {
     assert.equal(x.isSignedHostUrl(other), false, other)
@@ -1614,7 +1630,7 @@ test("a request to any other host is refused before the credentials leave", asyn
   let calls = 0
   const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: async () => { calls += 1; return sseResponse(okStream) } })
   const loaded = await plugin.auth.loader(async () => makeAuth(cred))
-  for (const url of ["https://api.example.com/v1/chat/completions", "http://snap-access.cn-north-4.myhuaweicloud.com/api/v2/chat/completions"]) {
+  for (const url of ["https://api.example.com/v1/chat/completions", "http://snap-access.cn-north-4.myhuaweicloud.com/api/v1/chat/completions"]) {
     const res = await loaded.fetch(url, chatInit({ model: "GLM-5.2", messages: [] }))
     assert.equal(res.status, 400)
     assert.match((await res.json()).error.message, /refusing to sign a request to/)
@@ -1809,7 +1825,7 @@ test("loader adds a signed maas_type header for benefit models", async () => {
   }
   const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: fetcher })
   const loaded = await plugin.auth.loader(async () => makeAuth(cred))
-  await loaded.fetch("https://snap-access.cn-north-4.myhuaweicloud.com/api/v2/chat/completions", {
+  await loaded.fetch("https://snap-access.cn-north-4.myhuaweicloud.com/api/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "glm-5.3-flash" }),
@@ -1958,7 +1974,7 @@ test("the model list comes from the main agent: original_id build, then CodeAgen
   }
   // The account's own agents, as the IDE lists them: the main one is "build".
   const agents = [
-    { agent_id: "9f0e5cb64a104dcfb4aa90dbedab7dcf", original_id: "team-leader" },
+    { agent_id: "a-team-1", original_id: "team-leader" },
     { agent_id: "a8bcb36232554267a5142361cc25a393", original_id: "build" },
     { agent_id: "c0de", original_id: "CodeAgent" },
   ]
@@ -2553,7 +2569,7 @@ const oaB64u = (o) => Buffer.from(JSON.stringify(o)).toString("base64url")
 
 /** The refresh token of one Huawei Cloud account: a JWT whose `user_profile` names it. */
 const oaRefreshToken = (claims = {}) =>
-  `h.${oaB64u({ user_profile: JSON.stringify({ principal_urn: "iam::d1:user:hw1", principal_id: "pid-oa", account_id: "01a1642ad2ae7f93bf6387ad2fc5f09e", ...claims }) })}.s`
+  `h.${oaB64u({ user_profile: JSON.stringify({ principal_urn: "iam::d1:user:hw1", principal_id: "pid-oa", account_id: "0123456789abcdef0123456789abcdef", ...claims }) })}.s`
 
 /**
  * A record exactly as the `officeace-auth` package stored it — the shape magpie
@@ -2569,15 +2585,15 @@ async function officeAceAuthRecord(overrides = {}, identity = "iam::d1:user:hw1"
     modelAppKey: "app-key",
     modelAppSecret: "app-secret",
     maasBaseUrl: "",
-    access: "HSTAOZ3JN3WWYF3L",
-    secret: "9hefA4eK2KTT",
+    access: "AK-TEST-0001",
+    secret: "SK-TEST-0001",
     securityToken: "ST-LEGACY",
     projectId: "",
     expiresAt: "2031-01-01T00:00:00Z",
     refreshToken: refresh,
     codeVerifier: "verifier",
     dpopPrivateJwk: keyPair.privateKeyJwk,
-    accountId: "01a1642ad2ae7f93bf6387ad2fc5f09e",
+    accountId: "0123456789abcdef0123456789abcdef",
     user_phone: "138****8000",
     ...overrides,
   }
@@ -2596,7 +2612,7 @@ async function officeAceAuthRecord(overrides = {}, identity = "iam::d1:user:hw1"
 
 /** What the subscription endpoint answers: a plan, a trial, an expired plan, a bonus. */
 const officeAceSubscriptionBody = () => ({
-  domain_id: "01a1642ad2ae7f93bf6387ad2fc5f09e",
+  domain_id: "0123456789abcdef0123456789abcdef",
   subscribe_status: "SUBSCRIBED",
   skus: [
     {
