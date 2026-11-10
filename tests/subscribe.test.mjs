@@ -13,9 +13,9 @@ import { subscribeClientModelInfo } from "../src/maas.mjs"
 process.env.MAGPIE_OFFICEACE_NO_TRIAL_CLAIM = "1"
 
 const stsOnly = {
-  access: "HSTAOZ3JN3WWYF3L",
-  secret: "9hefA4eK2KTT",
-  securityToken: "hQpjbi1ub3J0",
+  access: "AK-TEST-0001",
+  secret: "SK-TEST-0001",
+  securityToken: "ST-TEST-0001",
   expiresAt: new Date(Date.now() + 3600_000).toISOString(),
   user_phone: "138****8000",
 }
@@ -45,7 +45,7 @@ function autoSubscribeFetch() {
     if (u.includes("/v1/claw/client-subscription")) {
       return new Response(JSON.stringify({
         model_info: {
-          model_api_url_base: "modelgw-0006.officeace.cn-southwest-2.huaweicloud-agentarts.com",
+          model_api_url_base: "modelgw-xxxx.officeace.cn-southwest-2.huaweicloud-agentarts.com",
           model_auth_info: { model_app_key: "auto-key", model_app_secret: "auto-secret" },
         },
       }), { status: 200 })
@@ -64,7 +64,7 @@ test("subscribeClientModelInfo：POST client-subscription，带 x-subscription-t
     calls.push({ url: String(url), method: init.method, body: init.body, headers: init.headers })
     return new Response(JSON.stringify({
       model_info: {
-        model_api_url_base: "modelgw-0006.example",
+        model_api_url_base: "modelgw-xxxx.example",
         model_auth_info: { model_app_key: "k1", model_app_secret: "s1" },
       },
     }), { status: 200 })

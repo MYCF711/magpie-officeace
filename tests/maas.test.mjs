@@ -37,13 +37,13 @@ function writeAuthFile(file, entries) {
 }
 
 const stsOnly = {
-  access: "HSTAOZ3JN3WWYF3L",
-  secret: "9hefA4eK2KTT",
-  securityToken: "hQpjbi1ub3J0",
+  access: "AK-TEST-0001",
+  secret: "SK-TEST-0001",
+  securityToken: "ST-TEST-0001",
   expiresAt: "2026-10-29T10:00:00.000Z",
-  accountId: "01a1642ad2ae7f93bf6387ad2fc5f09e",
+  accountId: "0123456789abcdef0123456789abcdef",
 }
-const withMaas = { ...stsOnly, modelAppKey: "39161fdacb0c", modelAppSecret: "11644a70ea4d", maasBaseUrl: "" }
+const withMaas = { ...stsOnly, modelAppKey: "APP-KEY-TEST", modelAppSecret: "APP-SECRET-TEST", maasBaseUrl: "" }
 
 const record = (inner) => ({
   type: "oauth",
@@ -159,13 +159,13 @@ function maasFetch(grants, { status = 200 } = {}) {
 }
 
 const pendingCred = (extra = {}) => ({
-  access: "HSTAOZ3JN3WWYF3L",
-  secret: "9hefA4eK2KTT",
-  securityToken: "hQpjbi1ub3J0",
+  access: "AK-TEST-0001",
+  secret: "SK-TEST-0001",
+  securityToken: "ST-TEST-0001",
   projectId: "",
   expiresAt: "2031-01-01T00:00:00Z",
   refreshToken: "RT-KEEP",
-  accountId: "01a1642ad2ae7f93bf6387ad2fc5f09e",
+  accountId: "0123456789abcdef0123456789abcdef",
   user_phone: "138****8000",
   ...extra,
 })
@@ -324,7 +324,7 @@ test("单入口 · 没开通时先起受控浏览器：opened=true，回退时�
   assert.equal(a2.opened, true, "受控浏览器起来了 → 告诉 magpie 不要再开系统浏览器")
   assert.equal(a2.url, _internal.MAAS_CONSOLE_URL)
   assert.match(a2.instructions, /受控浏览器/)
-  assert.equal(openedArgs.accountKey, "01a1642ad2ae7f93bf6387ad2fc5f09e")
+  assert.equal(openedArgs.accountKey, "0123456789abcdef0123456789abcdef")
   _internal.maasPending.clear()
 })
 
@@ -338,7 +338,7 @@ function grantedFetch() {
       calls.push(String(url))
       return new Response(JSON.stringify({
         subscription: { model_info: {
-          model_api_url_base: "modelgw-0006.officeace.cn-southwest-2.huaweicloud-agentarts.com",
+          model_api_url_base: "modelgw-xxxx.officeace.cn-southwest-2.huaweicloud-agentarts.com",
           model_auth_info: { model_app_key: "app-key", model_app_secret: "app-secret", maas_api_key: "maas-key" },
         } },
       }), { status: 200 })
@@ -390,7 +390,7 @@ test("usage 记住没接 MaaS 的账号，接上了就忘掉；取的是最近�
   try {
     await plugin.auth.usage(async () => record(stsOnly), {})
     assert.equal(_internal.maasPending.size, 1, "没接 MaaS 的账号被记住")
-    assert.equal(_internal.latestMaasPending().securityToken, "hQpjbi1ub3J0")
+    assert.equal(_internal.latestMaasPending().securityToken, "ST-TEST-0001")
     await plugin.auth.usage(async () => record(withMaas), {})
     assert.equal(_internal.maasPending.size, 0, "接上 MaaS 之后忘掉")
   } finally {
@@ -427,7 +427,7 @@ async function storedOfficeAceRecord(overrides = {}) {
     expiresAt: "2031-01-01T00:00:00Z",
     refreshToken: "RT-DISK",
     dpopPrivateJwk: privateJwk,
-    accountId: "01a1642ad2ae7f93bf6387ad2fc5f09e",
+    accountId: "0123456789abcdef0123456789abcdef",
     user_phone: "138****8000",
     ...overrides,
   }

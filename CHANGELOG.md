@@ -47,7 +47,7 @@
 - **英文部分照抄官方品牌字样**：`华为云 HUAWEI`（HUAWEI 全大写）、`码道 CodeArts`、`果办 OfficeAce` —— 与华为云官网首屏/产品页一致。
 - **显示名调整（只改显示，不改包名/provider id）**：卡片标题从 `OfficeAce` 改为 **`华为云 HUAWEI`**（`package.json.name`，git 安装时它就是卡片标题；npm 包名仍是 `officeace-auth`，已装用户不用重装）。provider 名称：`officeace` → **果办 OfficeAce**，`codearts` → **码道 CodeArts**。`registry-entry.json` 的 `name`/`providers`/摘要同步更新（现在列出两个 provider）。
 - **模型别名去重**：CodeArts 的 agent 列表同时给出 `deepseek-v4.1-flash` 与 `deepseek-v4.1-flash-1017`（同一模型、同名同倍率），以前两条都列。现在按 `normalizeModelId` 的基名去重：账号 benefit/注册 id 优先，否则保留裸 id —— 实测该账号 10 → 9 条。
-- **可读的账号名**：`codearts` 的 `usage().user` 有手机号就显示打码手机号，否则显示 accountId 尾 6 位（`…e6a47f`），不再出现完整 `iam::…`；`officeace` 同样加了尾 6 位兜底。
+- **可读的账号名**：`codearts` 的 `usage().user` 有手机号就显示打码手机号，否则显示 accountId 尾 6 位（`…543210`），不再出现完整 `iam::…`；`officeace` 同样加了尾 6 位兜底。
 - **插件自动更新**：magpie 只自动更新 `@magpie-community/*`；本包复刻 `magicrew` 的 `src/auto-maintenance.mjs` —— 读 `plugin-updates.json` 的 `waiting`，调 `magpie plugin update`，成功后补 `updated[]`（「已自动更新」徽章读它）。找不到 magpie exe 时静默记 `no-magpie-exe`。
 - **核实「officeace 模型 14 → 7」不是回退**：`src/models.mjs` 自 0.1.20 起未变；同一台机器、同一账号 138****8000，装 0.1.26 与 0.2.0 跑 `magpie plugin list` 都是 **7 models**。7 是设计值（`/v1/model-token-rates` 白名单 ∩ `/v2/models` 目录，README 与 internals 都写 7）。14 只可能是旧构建/旧缓存（静态表 10 ∪ 实时 7 去重后正好 14），不是本次合并引入的。
 
@@ -61,7 +61,7 @@
 
 ## 0.1.25 — 2026-10-31
 
-- **新增：自动接入模型（登录即得 MaaS key）** —— 登录/加载账号时如果 `client-permission-validate` 没有 `model_info`，插件自动调 `POST {CLAW_BASE}/v1/claw/client-subscription`（`x-subscription-type: v2`、V11 签名、body `{}`，与 OfficeAce 客户端登录后「开通」按钮同一个端点）拿到 `model_info.model_auth_info`，写回账号 —— 不需要打开 OfficeAce 客户端 UI。真机实测：138****8000 / 180****2361 / 187****5670 三个原本「未接入 MaaS」的账号自动接入后，`client-permission-validate` 均返回 model_app_key，网关 `/v2/models` 均 200（25 个模型）；插件 `usage()` 不再标「未接入 MaaS」，`models` 含 deepseek-v4.1-flash。
+- **新增：自动接入模型（登录即得 MaaS key）** —— 登录/加载账号时如果 `client-permission-validate` 没有 `model_info`，插件自动调 `POST {CLAW_BASE}/v1/claw/client-subscription`（`x-subscription-type: v2`、V11 签名、body `{}`，与 OfficeAce 客户端登录后「开通」按钮同一个端点）拿到 `model_info.model_auth_info`，写回账号 —— 不需要打开 OfficeAce 客户端 UI。真机实测：138****8000 / 138****8000 / 138****8000 三个原本「未接入 MaaS」的账号自动接入后，`client-permission-validate` 均返回 model_app_key，网关 `/v2/models` 均 200（25 个模型）；插件 `usage()` 不再标「未接入 MaaS」，`models` 含 deepseek-v4.1-flash。
 
 ## 0.1.24 — 2026-10-31
 
@@ -69,7 +69,7 @@
 
 ## 0.1.23 — 2026-10-31
 
-- **修复：缺 modelAppKey 时不再误标「已退出登录」** —— 以前 `usage()` 在 `maasMissing` 时返回 `signIn: "expired"`，magpie 于是显示「已退出登录 — 请在此账号上选择重新登录」，但这些账号的 STS 凭据是好的（额度、签到正常），只是云端没下发 model_info（例如 138****8000 / 180****2361 / 187****5670）。现在只标 `plan: "未接入 MaaS"`，并说明「用这个账号打开一次 OfficeAce 客户端接入模型」；只有 refresh_token 真失效才要求重新登录。另：旧记录补全现在会对四个号逐个验证（138****8000 云端有 model_info → 自动恢复可用；其余三个云端确实没有，如实显示）
+- **修复：缺 modelAppKey 时不再误标「已退出登录」** —— 以前 `usage()` 在 `maasMissing` 时返回 `signIn: "expired"`，magpie 于是显示「已退出登录 — 请在此账号上选择重新登录」，但这些账号的 STS 凭据是好的（额度、签到正常），只是云端没下发 model_info（例如 138****8000 / 138****8000 / 138****8000）。现在只标 `plan: "未接入 MaaS"`，并说明「用这个账号打开一次 OfficeAce 客户端接入模型」；只有 refresh_token 真失效才要求重新登录。另：旧记录补全现在会对四个号逐个验证（138****8000 云端有 model_info → 自动恢复可用；其余三个云端确实没有，如实显示）
 
 ## 0.1.22 — 2026-10-31
 
@@ -115,7 +115,7 @@
 
 ## 0.1.14 — 2026-10-29
 
-- **修复：卡片上的账号名是一串 domain id（`01a1642ad2ae7f93bf6387ad2fc5f09e`），不是手机号** —— 华为云 OAuth 的 `refresh_token` 里 `user_profile` 只有 IAM 自己的 id，**从来没有手机号**；`toStored()` 又把 `cred.accountId`（domain id）当卡片名。三个账号并排时是三串看不懂的 ID，用户以为是乱码
+- **修复：卡片上的账号名是一串 domain id（`0123456789abcdef0123456789abcdef`），不是手机号** —— 华为云 OAuth 的 `refresh_token` 里 `user_profile` 只有 IAM 自己的 id，**从来没有手机号**；`toStored()` 又把 `cred.accountId`（domain id）当卡片名。三个账号并排时是三串看不懂的 ID，用户以为是乱码
 - **登录后读一次手机号**（`src/phone.mjs`）：`GET https://iam.cn-north-4.myhuaweicloud.com/v3.0/OS-USER/users/{principal_id}`，用同一套 STS 三元组走 SDK-HMAC-SHA256，返回 `user.phone`（实测 `0086-<PHONE>`；同路径 `/v3.1/` 是 `APIGW.0101`，只有 `/v3.0/` 通）。打码成 `138****8000` 存进凭据 `user_phone`，每个 IAM 用户每进程读一次
 - **`accountId` = 手机号，`uid` = domain id** —— 名字给人看、身份给宿主去重；取不到手机号就回落到 domain id，**绝不编造、也不影响登录**
 - 续期路径同样补取（老的已登录账号在下一次续期时改名），凭据形状只多一个可选字段 `user_phone`

@@ -12,10 +12,10 @@ import { accountIdentityOf, fetchAccountPhone, iamUserIdOf, maskPhone, profileOf
 function refreshToken(claims = {}) {
   const b64u = (o) => Buffer.from(JSON.stringify(o)).toString("base64url")
   const profile = {
-    account_id: "01a1642ad2ae7f93bf6387ad2fc5f09e",
-    account_name: "hw061571365626786",
-    principal_id: "01a1642ad2ae7623b72d576594aaf9ba",
-    principal_urn: "iam::01a1642ad2ae7f93bf6387ad2fc5f09e:user:hw061571365626786",
+    account_id: "0123456789abcdef0123456789abcdef",
+    account_name: "hw000000000000000",
+    principal_id: "0123456789abcdef0123456789abcdea",
+    principal_urn: "iam::0123456789abcdef0123456789abcdef:user:hw000000000000000",
     ...claims,
   }
   return `h.${b64u({ user_profile: b64u(profile) })}.s`
@@ -26,7 +26,7 @@ function cred(extra = {}) {
     access: "AK",
     secret: "SK",
     securityToken: "ST",
-    accountId: "01a1642ad2ae7f93bf6387ad2fc5f09e",
+    accountId: "0123456789abcdef0123456789abcdef",
     refreshToken: refreshToken(),
     ...extra,
   }
@@ -48,8 +48,8 @@ test("maskPhone：0086- / +86 / 裸号 / 已打码，一律 3+4", () => {
 
 test("profileOf / iamUserIdOf：从 refresh_token 的 user_profile 取 IAM 用户 id", () => {
   const c = cred()
-  assert.equal(profileOf(c)?.principal_id, "01a1642ad2ae7623b72d576594aaf9ba")
-  assert.equal(iamUserIdOf(c), "01a1642ad2ae7623b72d576594aaf9ba")
+  assert.equal(profileOf(c)?.principal_id, "0123456789abcdef0123456789abcdea")
+  assert.equal(iamUserIdOf(c), "0123456789abcdef0123456789abcdea")
   // 不是 JWT / 没有 claim → 空串，别去问 IAM
   assert.equal(iamUserIdOf({ refreshToken: "opaque" }), "")
   assert.equal(iamUserIdOf({}), "")
@@ -59,11 +59,11 @@ test("fetchAccountPhone：用同一套 STS 三元组读 IAM，且一个进程只
   const seen = []
   const fetcher = async (url, init) => {
     seen.push([String(url), new Headers(init.headers).get("authorization"), new Headers(init.headers).get("x-security-token")])
-    return new Response(JSON.stringify({ user: { name: "hw061571365626786", phone: "0086-13800138000" } }), { status: 200 })
+    return new Response(JSON.stringify({ user: { name: "hw000000000000000", phone: "0086-13800138000" } }), { status: 200 })
   }
   assert.equal(await fetchAccountPhone(cred(), fetcher), "138****8000")
   assert.equal(seen.length, 1)
-  assert.equal(seen[0][0], "https://iam.cn-north-4.myhuaweicloud.com/v3.0/OS-USER/users/01a1642ad2ae7623b72d576594aaf9ba")
+  assert.equal(seen[0][0], "https://iam.cn-north-4.myhuaweicloud.com/v3.0/OS-USER/users/0123456789abcdef0123456789abcdea")
   assert.match(String(seen[0][1]), /^SDK-HMAC-SHA256 /)
   assert.equal(seen[0][2], "ST", "临时凭据的 security token 必须带上")
   // 缓存：第二次不再发请求
@@ -84,14 +84,14 @@ test("fetchAccountPhone：没有 claim / 被拒 / 没号码 → 空串，从不�
 
 test("accountIdentityOf：accountId 是手机号，uid 是 domain id", () => {
   // 有手机号：卡片显示 138****8000，身份仍是 domain id
-  assert.deepEqual(accountIdentityOf({ user_phone: "138****8000", accountId: "01a1642ad2ae7f93bf6387ad2fc5f09e" }), {
+  assert.deepEqual(accountIdentityOf({ user_phone: "138****8000", accountId: "0123456789abcdef0123456789abcdef" }), {
     accountId: "138****8000",
-    uid: "01a1642ad2ae7f93bf6387ad2fc5f09e",
+    uid: "0123456789abcdef0123456789abcdef",
   })
   // 取不到手机号：回落到 domain id（不编造，也不隐藏）
-  assert.deepEqual(accountIdentityOf({ accountId: "01a1642ad2ae7f93bf6387ad2fc5f09e" }), {
-    accountId: "01a1642ad2ae7f93bf6387ad2fc5f09e",
-    uid: "01a1642ad2ae7f93bf6387ad2fc5f09e",
+  assert.deepEqual(accountIdentityOf({ accountId: "0123456789abcdef0123456789abcdef" }), {
+    accountId: "0123456789abcdef0123456789abcdef",
+    uid: "0123456789abcdef0123456789abcdef",
   })
   // 什么都没有：空对象
   assert.deepEqual(accountIdentityOf({}), {})

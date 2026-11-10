@@ -15,16 +15,16 @@ process.env.MAGPIE_OFFICEACE_NO_TRIAL_CLAIM = "1"
 const noModelInfo = async () => new Response(JSON.stringify({ error_code: "APIGW.0301" }), { status: 401 })
 
 const sts = {
-  access: "HSTAOZ3JN3WWYF3L",
-  secret: "9hefA4eK2KTT",
-  securityToken: "hQpjbi1ub3J0",
+  access: "AK-TEST-0001",
+  secret: "SK-TEST-0001",
+  securityToken: "ST-TEST-0001",
   expiresAt: "2026-10-29T10:00:00.000Z",
-  accountId: "01a1642ad2ae7f93bf6387ad2fc5f09e",
+  accountId: "0123456789abcdef0123456789abcdef",
 }
 const full = {
   ...sts,
-  modelAppKey: "39161fdacb0c",
-  modelAppSecret: "11644a70ea4d",
+  modelAppKey: "APP-KEY-TEST",
+  modelAppSecret: "APP-SECRET-TEST",
   maasBaseUrl: "",
 }
 
@@ -39,14 +39,14 @@ const record = (inner, extra = {}) => ({
 
 test("① 标准形状 + 完整凭据：照旧返回", () => {
   const cred = credentialOf(record(full))
-  assert.equal(cred.modelAppKey, "39161fdacb0c")
-  assert.equal(cred.securityToken, "hQpjbi1ub3J0")
+  assert.equal(cred.modelAppKey, "APP-KEY-TEST")
+  assert.equal(cred.securityToken, "ST-TEST-0001")
   assert.equal(cred.refreshToken, "RT-JWT")
 })
 
 test("② 铺平形状 + 完整凭据：照旧返回", () => {
   const cred = credentialOf({ ...full, refresh: "RT-JWT" })
-  assert.equal(cred.modelAppKey, "39161fdacb0c")
+  assert.equal(cred.modelAppKey, "APP-KEY-TEST")
   assert.equal(cred.refreshToken, "RT-JWT")
 })
 
@@ -54,14 +54,14 @@ test("③ STS-only（JSON 形状）：认作已登录，modelAppKey 为空", () 
   const cred = credentialOf(record(sts))
   assert.ok(cred, "STS 三元组齐全时应返回凭据，而不是 null")
   assert.equal(cred.modelAppKey, undefined)
-  assert.equal(cred.access, "HSTAOZ3JN3WWYF3L")
+  assert.equal(cred.access, "AK-TEST-0001")
   assert.equal(cred.refreshToken, "RT-JWT")
 })
 
 test("③ STS-only（铺平形状）：认作已登录", () => {
   const cred = credentialOf({ ...sts, refresh: "RT-JWT" })
   assert.ok(cred)
-  assert.equal(cred.securityToken, "hQpjbi1ub3J0")
+  assert.equal(cred.securityToken, "ST-TEST-0001")
 })
 
 test("③ STS 缺 securityToken：仍是未登录", () => {
@@ -83,10 +83,10 @@ test("toStored：存储形状没变（老用户不掉登录）", () => {
   const out = toStored({ ...full, refreshToken: "RT-JWT" })
   assert.equal(out.type, "oauth")
   assert.equal(typeof out.access, "string")
-  assert.equal(JSON.parse(out.access).modelAppKey, "39161fdacb0c")
+  assert.equal(JSON.parse(out.access).modelAppKey, "APP-KEY-TEST")
   assert.equal(out.refresh, "RT-JWT")
-  assert.equal(out.accountId, "01a1642ad2ae7f93bf6387ad2fc5f09e")
-  assert.equal(out.uid, "01a1642ad2ae7f93bf6387ad2fc5f09e")
+  assert.equal(out.accountId, "0123456789abcdef0123456789abcdef")
+  assert.equal(out.uid, "0123456789abcdef0123456789abcdef")
   assert.ok(Number.isFinite(out.expires))
 })
 

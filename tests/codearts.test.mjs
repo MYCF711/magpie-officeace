@@ -1958,7 +1958,7 @@ test("the model list comes from the main agent: original_id build, then CodeAgen
   }
   // The account's own agents, as the IDE lists them: the main one is "build".
   const agents = [
-    { agent_id: "9f0e5cb64a104dcfb4aa90dbedab7dcf", original_id: "team-leader" },
+    { agent_id: "a-team-1", original_id: "team-leader" },
     { agent_id: "a8bcb36232554267a5142361cc25a393", original_id: "build" },
     { agent_id: "c0de", original_id: "CodeAgent" },
   ]
@@ -2553,7 +2553,7 @@ const oaB64u = (o) => Buffer.from(JSON.stringify(o)).toString("base64url")
 
 /** The refresh token of one Huawei Cloud account: a JWT whose `user_profile` names it. */
 const oaRefreshToken = (claims = {}) =>
-  `h.${oaB64u({ user_profile: JSON.stringify({ principal_urn: "iam::d1:user:hw1", principal_id: "pid-oa", account_id: "01a1642ad2ae7f93bf6387ad2fc5f09e", ...claims }) })}.s`
+  `h.${oaB64u({ user_profile: JSON.stringify({ principal_urn: "iam::d1:user:hw1", principal_id: "pid-oa", account_id: "0123456789abcdef0123456789abcdef", ...claims }) })}.s`
 
 /**
  * A record exactly as the `officeace-auth` package stored it — the shape magpie
@@ -2569,15 +2569,15 @@ async function officeAceAuthRecord(overrides = {}, identity = "iam::d1:user:hw1"
     modelAppKey: "app-key",
     modelAppSecret: "app-secret",
     maasBaseUrl: "",
-    access: "HSTAOZ3JN3WWYF3L",
-    secret: "9hefA4eK2KTT",
+    access: "AK-TEST-0001",
+    secret: "SK-TEST-0001",
     securityToken: "ST-LEGACY",
     projectId: "",
     expiresAt: "2031-01-01T00:00:00Z",
     refreshToken: refresh,
     codeVerifier: "verifier",
     dpopPrivateJwk: keyPair.privateKeyJwk,
-    accountId: "01a1642ad2ae7f93bf6387ad2fc5f09e",
+    accountId: "0123456789abcdef0123456789abcdef",
     user_phone: "138****8000",
     ...overrides,
   }
@@ -2596,7 +2596,7 @@ async function officeAceAuthRecord(overrides = {}, identity = "iam::d1:user:hw1"
 
 /** What the subscription endpoint answers: a plan, a trial, an expired plan, a bonus. */
 const officeAceSubscriptionBody = () => ({
-  domain_id: "01a1642ad2ae7f93bf6387ad2fc5f09e",
+  domain_id: "0123456789abcdef0123456789abcdef",
   subscribe_status: "SUBSCRIBED",
   skus: [
     {
