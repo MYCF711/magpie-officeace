@@ -11,24 +11,24 @@
 //     "access": "<JSON 字符串，见下>",
 //     "refresh": "<华为云 STS refresh_token，JWT>",
 //     "expires": 1792841892266,
-//     "accountId": "01a1642ad2ae7f93bf6387ad2fc5f09e"
+//     "accountId": "0123456789abcdef0123456789abcdef"
 //   }
 //
 // `access` 里那份 JSON 的结构：
 //
 //   {
-//     "modelAppKey":     "39161fdacb0c...",   // MaaS 的 appKey
-//     "modelAppSecret":  "11644a70ea4d...",   // MaaS 的 appSecret
+//     "modelAppKey":     "APP-KEY-TEST...",   // MaaS 的 appKey
+//     "modelAppSecret":  "APP-SECRET-TEST...",   // MaaS 的 appSecret
 //     "maasBaseUrl":     "https://...",       // 推理域（可能空 → 回退官方）
-//     "access":          "HSTAOZ3JN3WWYF3L...",// STS AK
-//     "secret":          "9hefA4eK2KTT...",   // STS SK
-//     "securityToken":   "hQpjbi1ub3J0...",   // STS 临时令牌
+//     "access":          "AK-TEST-0001...",// STS AK
+//     "secret":          "SK-TEST-0001...",   // STS SK
+//     "securityToken":   "ST-TEST-0001...",   // STS 临时令牌
 //     "projectId":       "",
 //     "expiresAt":       "2026-10-24T11:38:12.266Z",
 //     "refreshToken":    "<同一个 JWT>",
 //     "codeVerifier":    "...",               // PKCE
 //     "dpopPrivateJwk":  { ... },             // ⚠ 续期要用同一把钥匙
-//     "accountId":       "01a1642ad2ae7f93bf6387ad2fc5f09e"
+//     "accountId":       "0123456789abcdef0123456789abcdef"
 //   }
 //
 // ═══════════════════════════════════════════════════════════════════
@@ -138,7 +138,7 @@ export function toStored(cred, prev) {
     // magpie 的 refreshLead 机制读这个字段
     refresh: cred.refreshToken ?? "",
     // 卡片显示名：手机号（IAM 读到的，已打码）优先；取不到才用 accountId。
-    // ⚠ accountId 是华为云的 domain id（`01a1642a…`），当名字显示就是「乱码」
+    // ⚠ accountId 是华为云的 domain id（`01234567…`），当名字显示就是「乱码」
     accountId: cred.user_phone || cred.accountId || "",
     // 厂商自己的 id（区分同名账号）—— 身份永远在 uid，不在 accountId
     uid: cred.accountId ?? "",

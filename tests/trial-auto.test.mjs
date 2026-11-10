@@ -8,9 +8,9 @@ import { _internal } from "../index.mjs"
 process.env.MAGPIE_OFFICEACE_NO_TRIAL_CLAIM = "0"
 
 const cred = {
-  access: "HSTAOZ3JN3WWYF3L",
-  secret: "9hefA4eK2KTT",
-  securityToken: "hQpjbi1ub3J0",
+  access: "AK-TEST-0001",
+  secret: "SK-TEST-0001",
+  securityToken: "ST-TEST-0001",
   expiresAt: new Date(Date.now() + 3600_000).toISOString(),
   user_phone: "138****8000",
 }

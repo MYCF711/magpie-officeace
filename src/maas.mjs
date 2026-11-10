@@ -91,7 +91,7 @@ export async function checkMaasAccess(cred, fetcher = fetch, opts = {}) {
  * 让它生效的那一步（客户端源码 `channel-plugins/auth/officeace-huawei-oauth`
  * 里的 `subscriptionClaw()`，同一个端点、同一个 V11 签名）。
  *
- * 2026-10-31 真机实测：138****8000 / 180****2361 / 187****5670 三个原本
+ * 2026-10-31 真机实测：138****8000 / 138****8000 / 138****8000 三个原本
  * 「未接入 MaaS」的账号调用后都拿到了 model_info，网关 /v2/models 回 200（25 个模型）。
  *
  * ⚠ 这是**写操作**（订阅/开通），只在账号确实缺 model_info 时调用一次；
