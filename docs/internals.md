@@ -182,6 +182,41 @@ UA 一律在签名算完之后 `set` 进去 —— 这样 `SignedHeaders` 与线
 ⚠ 换官方直连 `api.modelarts-maas.com` 也救不了：那台要 AK/SK 签名，
 Basic 凭据回 `400 ModelArts.81002`。
 
+### 码道 CodeArts 的输出预算上限（2026-11-11 实测）
+
+码道网关对 `max_tokens` 做**范围校验**，超出就回
+
+```
+400 InferHub.001001005.400 The request param is invalid
+```
+
+边界是硬的：**32000 通过，32001 拒**（deepseek-v4.1-flash / deepseek-v4.1-flash-1017 /
+glm-5.3 / glm-5.3-flash / kimi-k3 / openpangu-2.0-flash 一致；与 prompt 大小无关）。
+`max_completion_tokens` **不做这个范围校验**（131072、200000 都收）—— 但上游也不按它
+截断生成长度（`mct=64` 实测输出 21.7 MB），所以两条路都得夹到 32000。
+
+⚠ 与上游目录里声明的数不一致：agent 注册表的 `model_parameters.max_tokens` 写的是
+**65536**，聊天端只收 ≤32000。**以聊天端为准** —— 目录里的那个值照抄进
+`limit.output`，宿主就会按 128K 来要，于是必然 400。
+
+### 码道的流式形状与 messages 校验（2026-11-11 实测）
+
+同一个 400 的另外两面：
+
+* **流式 chunk 是累积快照**：每个 chunk 带 `choices[].text` —— 截至目前的**全文**
+  （chunk#0 `"1, "` → #1 `"1, 2, 3, "` → …），**没有 `delta`**。直接拼接会重复全文；
+  折流要只取新增后缀，非前缀则整体替换。转发给客户端前由
+  `snapshotToDeltaStream` 重写成标准 `delta.content` 增量。旧解析只读 `delta.*`，
+  折流出空 content，opencode 下一轮把空 assistant 丢掉，请求变成两条连续 user ——
+  就是 400 的真因。
+* **messages 严格校验**（隔离实验）：system 只能首位且仅一条；user/assistant
+  严格交替，**连续两条 user 即 400**（两条 user 合并成一条即 200）；content 必须是
+  字符串（`[{type:"text",…}]` 数组被拒）；结尾除单轮 assistant prefill 外须是 user。
+  `prepareChatBody` 里的 `normalizeMessages` 按此归一化。
+
+工具调用目前**上游失效**：带 `tools` / `tool_choice` 时上游既不回 `tool_calls` 也不回
+`function_call`（带上 `tool_choice` 强制指定也一样），插件侧无需改。
+
 ### 倍率缓存的失败语义（真实缺陷，2026-10-26）
 
 `fetchTokenRates` 失败时**返回上一份成功缓存，而不是空表**：

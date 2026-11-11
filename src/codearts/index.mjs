@@ -193,8 +193,12 @@ const SESSION_RETRY_BUDGET_MS = 150_000
 const PERMIT_MAX_HOLD_MS = 15 * 60 * 1000
 // How much of a 200 body to read while looking for an embedded error.
 const SSE_PEEK_LIMIT = 16 * 1024
-// The gateway rejects a larger output budget (RANGE_VALIDATOR, 0..65536).
-const MAX_OUTPUT_TOKENS = 65_536
+// The gateway rejects a larger output budget: `max_tokens` above 32000 comes
+// back as `400 InferHub.001001005.400 The request param is invalid` (measured
+// 2026-11-11 on deepseek-v4.1-flash, glm-5.3-flash and kimi-k3: 32000 answers,
+// 32001 does not). `max_completion_tokens` is not range-checked upstream.
+const MAX_OUTPUT_TOKENS = 32_000
+
 // Left to its default the gateway streams the reasoning inside `content`, so a
 // caller shows the thinking as the answer; asked for explicitly it goes to
 // `reasoning_content` and `content` is the reply only.
@@ -956,21 +960,66 @@ function isRegularModel(model, state) {
 }
 
 /**
+ * A message's content as the gateway takes it: a plain string. Array content
+ * (the OpenAI multimodal shape) flattens to the text of its `type: "text"`
+ * parts; anything else becomes "".
+ */
+function messageContentToString(content) {
+  if (typeof content === "string") return content
+  if (Array.isArray(content)) {
+    return content.map((p) => (p?.type === "text" && typeof p.text === "string" ? p.text : "")).join("")
+  }
+  return ""
+}
+
+/**
+ * The gateway's strict messages shape (probed against the live gateway,
+ * 2026-11-11): `system` only at the head and only once, `user`/`assistant`
+ * strictly alternating, every content a string. Two consecutive user messages
+ * answer 400 `InferHub.001001005.400` — merging them answers 200. Systems
+ * merge into one at the front; consecutive same-role messages merge with a
+ * blank line between; tool results go as user; array content flattens.
+ */
+function normalizeMessages(messages) {
+  const systems = []
+  const turns = []
+  for (const m of Array.isArray(messages) ? messages : []) {
+    if (!m || typeof m !== "object") continue
+    const role = m.role === "assistant" ? "assistant" : m.role === "system" ? "system" : "user"
+    const content = messageContentToString(m.content)
+    if (role === "system") {
+      systems.push(content)
+      continue
+    }
+    const prev = turns[turns.length - 1]
+    if (prev && prev.role === role) {
+      prev.content = prev.content ? `${prev.content}\n\n${content}` : content
+    } else {
+      turns.push({ ...m, role, content })
+    }
+  }
+  const head = systems.filter(Boolean).join("\n\n")
+  return head ? [{ role: "system", content: head }, ...turns] : turns
+}
+
+/**
  * Reshape a chat body into what the gateway accepts and meters:
  * - the bare model id, without the host's `codearts/` prefix;
  * - thinking asked for explicitly (unless the caller said, or the plugin's
  *   `thinking: false` option), so `content` carries only the reply;
- * - the output budget inside the gateway's 65536;
+ * - the output budget inside the gateway's 32000;
  * - always `stream: true`. CodeArts meters only streamed answers — a
  *   non-streaming 200 returns tokens yet leaves the credits untouched — so a
  *   caller that asked for JSON gets the stream folded back (`fold`);
  * - tool names within the gateway's 64 characters (`names`, short → the
- *   agent's own, to put back in the answer; null when none was cut).
+ *   agent's own, to put back in the answer; null when none was cut);
+ * - messages in the gateway's strict shape (`normalizeMessages`).
  * A body that is not a chat (no `model` + `messages`) gives null.
  */
 function prepareChatBody(parsed, { thinking = true } = {}) {
   if (!parsed || typeof parsed.model !== "string" || !Array.isArray(parsed.messages)) return null
   const body = { ...parsed, model: upstreamModelId(parsed.model) }
+  body.messages = normalizeMessages(body.messages)
   const names = shortenToolNames(body)
   // `injected`: ours to take back should a model refuse the parameter.
   const injected = thinking && body.thinking === undefined
@@ -1021,7 +1070,9 @@ function toolNameSlots(body) {
     if (!m || typeof m !== "object") continue
     for (const c of Array.isArray(m.tool_calls) ? m.tool_calls : []) slot(c?.function, "name")
     slot(m.function_call, "name")
-    if (m.role === "tool" || m.role === "function") slot(m, "name")
+    // `role: "tool"` as normalizeMessages sent it — a user message still
+    // carrying its tool result's `tool_call_id` and `name`.
+    if (m.role === "tool" || m.role === "function" || (m.tool_call_id != null && typeof m.name === "string")) slot(m, "name")
   }
   return slots
 }
@@ -1186,6 +1237,63 @@ function restoreToolNamesInStream(stream, names) {
 
 // ---- reading the gateway's answers -----------------------------------------
 
+/**
+ * The gateway's streamed shape since 2026-11-11 (direct-probe measurement): each chunk carries `choices[].text`, a
+ * cumulative snapshot of the whole answer so far, and no `delta` at all — the
+ * old reader folded to an empty answer, and the next turn's request went out
+ * as two consecutive user messages (`InferHub.001001005.400`). This rewrites
+ * the stream into the OpenAI shape the agents expect: each chunk's `delta.
+ * content` is the suffix its snapshot added. Events that already carry a
+ * `delta` (or no choice) pass byte for byte.
+ */
+function snapshotToDeltaStream(stream) {
+  const dec = new TextDecoder()
+  const enc = new TextEncoder()
+  let pending = ""
+  const last = new Map() // choice index → the snapshot seen before it
+  const line = (l) => {
+    const t = l.replace(/\r$/, "")
+    if (!t.startsWith("data:")) return l
+    const payload = t.slice(5).trim()
+    if (payload === "[DONE]") return l
+    const ev = safeJson(payload)
+    const choice = Array.isArray(ev?.choices) ? ev.choices[0] : undefined
+    if (!choice || typeof choice.text !== "string") return l
+    const index = Number.isInteger(choice.index) ? choice.index : 0
+    const prev = last.get(index) ?? ""
+    const delta = choice.text.startsWith(prev) ? choice.text.slice(prev.length) : choice.text
+    last.set(index, choice.text)
+    const next = { ...ev, choices: [{ ...choice, delta: delta ? { content: delta } : {} }] }
+    delete next.choices[0].text
+    return `data: ${JSON.stringify(next)}${l.endsWith("\r") ? "\r" : ""}`
+  }
+  const reader = stream.getReader()
+  return new ReadableStream({
+    async pull(controller) {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) {
+          const rest = pending + dec.decode()
+          pending = ""
+          if (rest) controller.enqueue(enc.encode(rest.split("\n").map(line).join("\n") + "\n"))
+          controller.close()
+          return
+        }
+        pending += dec.decode(value, { stream: true })
+        const cut = pending.lastIndexOf("\n")
+        if (cut < 0) continue
+        const whole = pending.slice(0, cut)
+        pending = pending.slice(cut + 1)
+        controller.enqueue(enc.encode(whole.split("\n").map(line).join("\n") + "\n"))
+        return
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason)
+    },
+  })
+}
+
 /** The JSON payloads of an SSE body, in arrival order, `[DONE]` skipped. */
 function parseSseEvents(text) {
   const events = []
@@ -1254,6 +1362,7 @@ function eventHasContent(event) {
   const choice = Array.isArray(event?.choices) ? event.choices[0] : undefined
   if (!choice) return false
   if (choice.finish_reason != null || choice.message) return true
+  if (typeof choice.text === "string" && choice.text) return true
   const delta = asRecord(choice.delta)
   if (typeof delta.content === "string" && delta.content) return true
   if (typeof delta.reasoning_content === "string" && delta.reasoning_content) return true
@@ -1350,12 +1459,23 @@ function completionFromChunks(events) {
   let finish = null
   let usage = null
   let model = first.model
+  const snapshots = new Map() // choice index → the cumulative text seen before it
   for (const ev of events) {
     if (ev.usage) usage = ev.usage
     if (typeof ev.model === "string" && ev.model) model = ev.model
     const choice = Array.isArray(ev.choices) ? ev.choices[0] : undefined
     if (!choice) continue
     if (choice.finish_reason != null) finish = choice.finish_reason
+    if (typeof choice.text === "string") {
+      // The gateway's snapshot shape: take only the suffix this chunk added;
+      // a snapshot that is not an extension of the last one replaces it whole.
+      const index = Number.isInteger(choice.index) ? choice.index : 0
+      const rec = snapshots.get(index) ?? { last: "", parts: [] }
+      if (!snapshots.has(index)) snapshots.set(index, rec)
+      if (choice.text.startsWith(rec.last)) rec.parts.push(choice.text.slice(rec.last.length))
+      else rec.parts = [choice.text]
+      rec.last = choice.text
+    }
     const delta = asRecord(choice.delta)
     if (typeof delta.content === "string") content.push(delta.content)
     if (typeof delta.reasoning_content === "string") reasoning.push(delta.reasoning_content)
@@ -1367,7 +1487,10 @@ function completionFromChunks(events) {
       if (typeof call.function?.arguments === "string") slot.function.arguments += call.function.arguments
     }
   }
-  const message = { role: "assistant", content: content.join("") }
+  const message = {
+    role: "assistant",
+    content: snapshots.size ? [...snapshots.values()].map((r) => r.parts.join("")).join("") : content.join(""),
+  }
   if (reasoning.length > 0) message.reasoning_content = reasoning.join("")
   const calls = toolCalls.filter(Boolean)
   if (calls.length > 0) message.tool_calls = calls
@@ -1754,7 +1877,7 @@ async function signedFetch(cred, input, init, context) {
         if (!head.code) {
           if (chat.fold) return await foldAnswer(res, head, chat.names)
           handedOver = true
-          const stream = restoreToolNamesInStream(replayBody(head, release), chat.names)
+          const stream = restoreToolNamesInStream(snapshotToDeltaStream(replayBody(head, release)), chat.names)
           return new Response(stream, { status: res.status, statusText: res.statusText, headers: streamHeaders(res.headers) })
         }
         text = head.text
@@ -2928,6 +3051,7 @@ export const _internal = {
   toBytes, isBenefitModel, prepareChatBody, signedFetch, signedGet,
   TOOL_NAME_LIMIT, cutToolName, shortenToolNames, restoreToolNames, restoreToolNamesInStream,
   parseSseEvents, errorCodeOf, errorMessageOf, isStaleCredential, isRateLimitCode, embeddedErrorStatus, isNotMultimodal, classifyHead,
+  eventHasContent, snapshotToDeltaStream, normalizeMessages,
   peekAnswer, completionFromChunks, createConcurrencyGate, delay, retryDelayMs,
   isRegularModel, queueInfoOf, waitInQueue, TRACE_QUEUE_URL, SESSION_HEADER,
   snapRequest, dailyCheckin,

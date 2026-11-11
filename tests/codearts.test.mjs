@@ -233,6 +233,108 @@ test("prepareChatBody reshapes a chat into what the gateway accepts and meters",
   assert.equal(x.prepareChatBody(null), null)
 })
 
+// The gateway range-checks `max_tokens` and answers 400
+// `InferHub.001001005.400 The request param is invalid` above 32000
+// (measured 2026-11-11: 32000 answers, 32001 does not, on
+// deepseek-v4.1-flash, glm-5.3-flash and kimi-k3). The host may ask for
+// 128K, so the budget has to be clamped below that limit — and the number
+// the plugin declares as the model's output limit has to be the same one.
+test("prepareChatBody clamps the output budget to the gateway's 32000", () => {
+  assert.equal(x.MAX_OUTPUT_TOKENS, 32_000)
+  const out = x.prepareChatBody({ model: "codearts/deepseek-v4.1-flash", messages: [], max_tokens: 131072 })
+  assert.equal(out.body.max_tokens, 32_000)
+  const mct = x.prepareChatBody({ model: "codearts/deepseek-v4.1-flash", messages: [], max_completion_tokens: 131072 })
+  assert.equal(mct.body.max_completion_tokens, 32_000)
+  const small = x.prepareChatBody({ model: "codearts/deepseek-v4.1-flash", messages: [], max_tokens: 4096 })
+  assert.equal(small.body.max_tokens, 4096)
+})
+
+// The gateway switched its streamed shape (2026-11-11, direct-probe
+// measurement): every chunk carries `choices[].text`, a
+// CUMULATIVE snapshot of the whole answer so far, and no `delta` at all. The
+// old reader folded `delta.*` only, so every answer came out empty and the
+// next turn's request went out as two consecutive user messages — 400
+// InferHub.001001005.400.
+const snapEvents = (...texts) =>
+  texts.map((text, i) => `data: ${JSON.stringify({ id: "c1", choices: [{ index: 0, text, finish_reason: i === texts.length - 1 ? "stop" : null }] })}\n\n`).join("")
+
+test("eventHasContent recognizes the gateway's cumulative choices[].text", () => {
+  assert.equal(x.eventHasContent({ choices: [{ text: "1, " }] }), true)
+  assert.equal(x.eventHasContent({ choices: [{ text: "" }] }), false)
+  assert.equal(x.eventHasContent({ choices: [{ delta: { content: "hi" } }] }), true) // the old shape still counts
+})
+
+test("completionFromChunks folds cumulative text snapshots without repeating the answer", () => {
+  const events = x.parseSseEvents(snapEvents("1, ", "1, 2, 3, ", "1, 2, 3, 4", "1, 2, 3, 4"))
+  const message = x.completionFromChunks(events).choices[0].message
+  assert.equal(message.content, "1, 2, 3, 4")
+  // a snapshot that is not an extension of the last one replaces it whole
+  const jump = x.completionFromChunks(x.parseSseEvents(snapEvents("abc", "xyz")))
+  assert.equal(jump.choices[0].message.content, "xyz")
+  // the old delta shape still folds by concatenation
+  const deltaFold = x.completionFromChunks(x.parseSseEvents(`data: ${JSON.stringify({ choices: [{ delta: { content: "a" } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: { content: "b" }, finish_reason: "stop" }] })}\n\n`))
+  assert.equal(deltaFold.choices[0].message.content, "ab")
+})
+
+test("prepareChatBody normalizes messages to the gateway's strict shape", () => {
+  // Systems anywhere merge into one at the front; consecutive same-role
+  // messages merge with a blank line; array content flattens to a string;
+  // tool results go as user.
+  const out = x.prepareChatBody({
+    model: "GLM-5.2",
+    messages: [
+      { role: "user", content: [{ type: "text", text: "look at " }, { type: "text", text: "this" }] },
+      { role: "user", content: "and also that" },
+      { role: "system", content: "second system" },
+      { role: "tool", content: "result" },
+      { role: "assistant", content: "prefill" },
+    ],
+  }).body.messages
+  assert.deepEqual(
+    out.map((m) => [m.role, m.content]),
+    [
+      ["system", "second system"],
+      // the tool result is a user turn after two user turns: all three merge
+      ["user", "look at this\n\nand also that\n\nresult"],
+      ["assistant", "prefill"],
+    ],
+  )
+  // a well-formed body passes through unchanged in shape
+  const plain = x.prepareChatBody({ model: "GLM-5.2", messages: [{ role: "system", content: "s" }, { role: "user", content: "hi" }] }).body.messages
+  assert.deepEqual(plain, [{ role: "system", content: "s" }, { role: "user", content: "hi" }])
+})
+
+const readAll = async (stream) => {
+  const dec = new TextDecoder()
+  let out = ""
+  const reader = stream.getReader()
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    out += dec.decode(value, { stream: true })
+  }
+  return out
+}
+
+test("snapshotToDeltaStream rewrites cumulative text chunks into delta.content", async () => {
+  const source = new ReadableStream({
+    start(c) {
+      c.enqueue(buf(snapEvents("1, ", "1, 2, 3")))
+      c.enqueue(buf(`data: [DONE]\n\n`))
+      c.close()
+    },
+  })
+  const text = await readAll(x.snapshotToDeltaStream(source))
+  const events = x.parseSseEvents(text)
+  assert.deepEqual(events.map((e) => e.choices?.[0]?.delta?.content ?? ""), ["1, ", "2, 3"])
+  // the snapshot field is gone; everything else (id, finish_reason) rides along
+  assert.equal(events.every((e) => e.choices?.[0]?.text === undefined), true)
+  assert.equal(events.every((e) => e.id === "c1"), true)
+  // deltas already shaped pass through untouched
+  const passThrough = `data: ${JSON.stringify({ choices: [{ delta: { content: "x" } }] })}\n\ndata: [DONE]\n\n`
+  assert.equal(await readAll(x.snapshotToDeltaStream(new ReadableStream({ start(c) { c.enqueue(buf(passThrough)); c.close() } }))), passThrough)
+})
+
 // The free model's TPM limit, word for word as the gateway sent it in a 200.
 const tpmEvent = 'data:{"text":"[DONE]","error_code":"InferHub.ModelArts.81111.429","error_msg":"The model TPM limit has been significantly exceeded. Please reduce the request rate and retry later."}'
 

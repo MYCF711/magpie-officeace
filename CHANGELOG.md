@@ -1,3 +1,10 @@
+## 0.2.10 — 2026-11-11
+
+- **修复码道 CodeArts 聊天返回 `400 InferHub.001001005.400 The request param is invalid`**：网关对 `max_tokens` 做范围校验，超过 **32000** 一律拒收（实测 32000 通过、32001 拒；deepseek-v4.1-flash / glm-5.3-flash / kimi-k3 一致）。此前插件把宿主传来的 `max_tokens` 夹到 65536 —— 宿主按模型声明的 128K 输出预算来要，于是必然越界。输出预算上限改为 **32000**，模型声明的 `limit.output` 同步为 32000，客户端不会再要一个网关不收的数。
+  - `max_completion_tokens` 不受该范围校验，但为免两条路给出不同的预算，仍一并夹到 32000。
+- **适配上游流式形状变更（2026-11-11 实测）**：上游每个 chunk 现在带 `choices[].text` —— 全文的**累积快照**，不再有 `choices[].delta`。旧解析只读 `delta.*`，折流得到空 content，下一轮请求变成两条连续 user —— 同一个 400 的真因。`completionFromChunks` / `eventHasContent` 现在识别快照（只取新增后缀，非前缀则整体替换）；流式转发前新增 `snapshotToDeltaStream` 把快照重写成标准 `delta.content` 增量。
+- **`prepareChatBody` 归一化 messages 到上游的严格形状**：system 只能首位一条（多合并、非首位上移）；连续同角色消息合并；数组 content 拍平为字符串；`tool` 结果转为 user。上游严格按此校验，两条连续 user 即 400。
+
 ## 0.2.9 — 2026-11-10
 
 - **修复码道 CodeArts 聊天返回 `400 InferHub.APIG.0101.404`**：聊天基址从 `/api/v2` 切换到已发布的 `/api/v1`。同一账号、同一模型、同一签名逻辑的隔离 A/B 中，v2 返回上述 400，v1 返回 200 并回显 `deepseek-v4.1-flash`；新增固定端点的防回归测试。

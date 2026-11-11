@@ -63,6 +63,7 @@ curl -s "https://usemagpie.ai/api/latest?channel=stable" | grep -o '"version":"[
 | 13 | 改了代码重装，行为没变 | 同版本号重打包会命中 bun 缓存 —— 必须 bump `version` | 脚手架 UPDATING 第 1 步 |
 | 14 | 想让卡片标题 / 许可 / 「源码」按钮对，去改了 magpie 的缓存 | 插件对 magpie 目录**只有读的份**；唯一载体是 `registry-entry.json` | internals 卡片标题 |
 | 15 | **上游偶发或固定回 403 `TM.00000001`（文案是「网络繁忙，请稍后重试」），重试和换账号都没用**；或者某个 provider 换到新网络 / 新账号后就不通 | 每个打上游的 `fetch` 都**显式**带 `User-Agent`，值是**该服务官方客户端**的 UA —— 绝不写 `<包名>/<版本号>`，也绝不让宿主的 `magpie/<version>` 透传（插件不设 UA 时它就这么上去）。官方是网页就用完整 Chrome UA；有 App / CLI 客户端就用那个客户端的 UA。判据：`node scripts/check-ua.mjs` 退出 0（模板坑表第 38 条） | README「3. User-Agent 常常是硬校验」· `scripts/check-ua.mjs` |
+| 16 | 码道 CodeArts 对话回 `400 InferHub.001001005.400 The request param is invalid` | 两个独立触发：① `max_tokens` 范围校验，**上限 32000**（实测 32000 过、32001 拒；目录里的 65536 不是聊天端的值）；② **messages 形状严格校验** —— system 只能首位一条、user/assistant 严格交替（连续两条 user 即 400）、content 必须字符串。另有：流式 chunk 是 `choices[].text` **累积快照**（无 `delta`），旧解析折流出空 content → 下轮变两条 user → 400 | internals「输出预算上限」· `prepareChatBody` / `snapshotToDeltaStream` |
 
 ---
 
