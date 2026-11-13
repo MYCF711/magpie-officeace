@@ -224,6 +224,54 @@ Basic 凭据回 `400 ModelArts.81002`。
 - 响应是 snake_case（`model_name` / `cost_coefficient`），兼容 camelCase
 - `x1` 不标（全默认倍率没有信息量），只标非 1 的
 
+### 聊天参数：/api/v1 的生成前三族校验（2026-11-13 实测）
+
+`/api/v1/chat/completions` 在**开始生成之前**做参数校验，违规一律回同一个泛化错误
+（约 0.15–0.65 s，body 可以只有 ~130 B、无 tools、无 system）：
+
+```
+400 InferHub.001001005.400  The request param is invalid, Please check it
+```
+
+三族参数各自独立触发（同一账号、同一 STS 签名、逐项只叠加一个变量）：
+
+| 参数族 | 放行 | 违规 → 400 |
+|---|---|---|
+| `max_tokens` | ≤ **32000** | 32001、32768、65536、131072 …（deepseek-v4.1-flash / kimi-k3.1-pro / glm-5.3 / openpangu-2.0-pro 四个模型同一条线） |
+| `seed` | `0` / `1` | `2`…`2048`、`-1`、`2^31-1`、`"42"`、`42.0`、`true` / `false`（29/29 次 400） |
+| `stop` | 单个字符串 | 数组（`["\n"]`、`["x"]`、`["x","y"]`、甚至 `[]`，11/11 次 400） |
+
+两条容易踩的补充：
+
+- **实际致命的是宿主写入的 `max_tokens`，不要把两个键混为一谈**：本机当前 `deepseek-v4.1-flash`
+  配对复测为 `max_tokens=32000` → 200、`32001/65536` → 400；但
+  `max_completion_tokens=32001/65536` → 200，`128000` 经插件夹取后也为 200。
+  真实归档里 DSH 原本只写 `max_completion_tokens=128000`，宿主再按旧的目录值 65536 写入
+  `max_tokens` 才触发 400。插件仍对两个键都夹 32000，避免不同请求形状的兼容差异。
+- **`stream: false` 的折叠路径会把 `seed` 丢掉**：同一 `seed=42` 非流式 3/3 次 200，
+  流式 3/3 次 400 —— 因此用非流式探针测不出 `seed` 这一族；`stop` 数组在非流式仍然 400。
+- **不要用单次 200 当作「参数合法」**：边界值偶发会走上一条慢速回退路径（14–39 s 后
+  200，SSE 不收尾）。判边界要用「32000 过 / 32001 拒」这样的成对复测。
+
+⇒ 代码侧对应：`MAX_OUTPUT_TOKENS = 32_000`（夹 `max_tokens` / `max_completion_tokens`），
+`prepareChatBody` 里再由 `sanitizeUnsupportedParams` 删掉违规 `seed`、把单元素 `stop`
+数组转字符串。模型目录 `GET /v1/model/builtin` 自报的 `max_tokens: 65536` 是 `/api/v2`
+的预算，**不能**直接当聊天端的 `max_tokens` 上报给宿主或下游客户端。
+
+**适配后的故障转移**：`InferHub.001001005.400` 只凭错误码不能判断具体是哪一族，但真实泛化文案
+`The request param is invalid, Please check it` 在完成 32000 夹取、seed/stop 清洗后仍出现时，
+按 scaffold 的「上游明确错误体」返回 **502**，让 magpie 换号/换模型；`RANGE_VALIDATOR` 等
+能明确指出客户端参数问题的响应仍为 400。该规则同时覆盖 HTTP 400 JSON 与 HTTP 200 SSE 内
+`error.message` 只把 code 写在括号里的形状，避免流式透传错误或非流式折叠成空回答。
+
+### 流式响应：`choices[].text` 是累积快照（PR #35）
+
+上游当前会发 `object: "chat.completion"` 的 chunk，`choices[].text` 每次都是**截至目前的全文**，
+而不是本块新增内容。直接拼接会重复全文；旧代码只读 `delta`，会把正常回答折成 `content:""`。
+因此 `completionFromChunks` 对每个 choice 只取相对上一快照的新增后缀，非前缀时整体替换；
+流式转发则由 `snapshotToDeltaStream` 改成标准 `delta.content` 增量。已有 `delta` 的旧形状逐字节透传。
+这里只接入 PR #35 的快照部分，**不采用**其旧版 `normalizeMessages` / tool 结果改 user 的改动。
+
 ---
 
 ## 额度分桶

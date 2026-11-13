@@ -196,8 +196,18 @@ const SESSION_RETRY_BUDGET_MS = 150_000
 const PERMIT_MAX_HOLD_MS = 15 * 60 * 1000
 // How much of a 200 body to read while looking for an embedded error.
 const SSE_PEEK_LIMIT = 16 * 1024
-// The gateway rejects a larger output budget (RANGE_VALIDATOR, 0..65536).
-const MAX_OUTPUT_TOKENS = 65_536
+// The gateway rejects a larger output budget. On the /api/v1 chat route the
+// range validator refuses `max_tokens` above 32000 (measured 2026-11-11/13 on
+// deepseek-v4.1-flash, kimi-k3.1-pro, glm-5.3 and openpangu-2.0-pro: 32000
+// answers 200, 32001..32768 answer 400 `InferHub.001001005.400` in ~0.3 s,
+// before any generation). The `/v1/model/builtin` catalog advertises 65536,
+// but that is the /api/v2 budget, not the chat route's.
+const MAX_OUTPUT_TOKENS = 32_000
+// `/api/v1` rejects these outright with the same generic 400 (measured
+// 2026-11-13): `seed` outside {0, 1}, and `stop` as an array (even `[]`;
+// only a single string is accepted). Drop/convert them before signing, or the
+// caller's whole request dies on a validation error.
+const SEED_ALLOWED = new Set([0, 1])
 // Left to its default the gateway streams the reasoning inside `content`, so a
 // caller shows the thinking as the answer; asked for explicitly it goes to
 // `reasoning_content` and `content` is the reply only.
@@ -963,7 +973,9 @@ function isRegularModel(model, state) {
  * - the bare model id, without the host's `codearts/` prefix;
  * - thinking asked for explicitly (unless the caller said, or the plugin's
  *   `thinking: false` option), so `content` carries only the reply;
- * - the output budget inside the gateway's 65536;
+ * - the output budget inside the gateway's 65536 (v2) / 32000 (v1);
+ * - `seed` / `stop` in the shapes the gateway takes; the ones it refuses are
+ *   dropped so one stray parameter cannot fail the whole request;
  * - always `stream: true`. CodeArts meters only streamed answers — a
  *   non-streaming 200 returns tokens yet leaves the credits untouched — so a
  *   caller that asked for JSON gets the stream folded back (`fold`);
@@ -981,9 +993,32 @@ function prepareChatBody(parsed, { thinking = true } = {}) {
   for (const k of ["max_tokens", "max_completion_tokens"]) {
     if (typeof body[k] === "number" && body[k] > MAX_OUTPUT_TOKENS) body[k] = MAX_OUTPUT_TOKENS
   }
+  sanitizeUnsupportedParams(body)
   const fold = body.stream !== true
   body.stream = true
   return { body, fold, injected, names }
+}
+
+/**
+ * Take out the chat parameters `/api/v1` turns away with the generic
+ * `InferHub.001001005.400` — a validation error that would otherwise kill
+ * every request from a caller that sets them (measured 2026-11-13, same
+ * account, body only ~130 B: `seed=42` 3/3 400 and `stop: ["\n"]` 3/3 400,
+ * while `seed=0` and `stop: "x"` answer 200).
+ *
+ * - `seed` is taken only as 0 or 1; any other value is dropped (the request
+ *   then loses its determinism, which beats failing outright).
+ * - `stop` is taken as a single string. A one-item array carries the same
+ *   meaning, so it goes as that string; an empty or multi-item array cannot be
+ *   expressed and is dropped. (The non-streaming fold path already loses
+ *   `seed` server-side, so callers rarely rely on either.)
+ */
+function sanitizeUnsupportedParams(body) {
+  if (body.seed !== undefined && !SEED_ALLOWED.has(body.seed)) delete body.seed
+  if (Array.isArray(body.stop)) {
+    if (body.stop.length === 1 && typeof body.stop[0] === "string") body.stop = body.stop[0]
+    else delete body.stop
+  }
 }
 
 // ---- tool names over the gateway's limit (#432) -----------------------------
@@ -1189,6 +1224,71 @@ function restoreToolNamesInStream(stream, names) {
 
 // ---- reading the gateway's answers -----------------------------------------
 
+/**
+ * The gateway's streamed shape since 2026-11-11 (direct-probe measurement):
+ * each chunk carries `choices[].text`, a cumulative snapshot of the whole
+ * answer so far, and no `delta` at all — the old reader folded to an empty
+ * answer, and the next turn's request went out as two consecutive user
+ * messages (`InferHub.001001005.400`). This rewrites the stream into the
+ * OpenAI shape the agents expect: each chunk's `delta.content` is the suffix
+ * its snapshot added. Events that already carry a `delta` (or no choice) pass
+ * byte for byte.
+ */
+function snapshotToDeltaStream(stream) {
+  const dec = new TextDecoder()
+  const enc = new TextEncoder()
+  let pending = ""
+  const last = new Map() // choice index → the snapshot seen before it
+  const line = (l) => {
+    const t = l.replace(/\r$/, "")
+    if (!t.startsWith("data:")) return l
+    const payload = t.slice(5).trim()
+    if (payload === "[DONE]") return l
+    const ev = safeJson(payload)
+    const choice = Array.isArray(ev?.choices) ? ev.choices[0] : undefined
+    if (!choice || typeof choice.text !== "string") return l
+    const index = Number.isInteger(choice.index) ? choice.index : 0
+    const prev = last.get(index) ?? ""
+    const delta = choice.text.startsWith(prev) ? choice.text.slice(prev.length) : choice.text
+    last.set(index, choice.text)
+    // Always rewritten, even when this snapshot added nothing (the gateway
+    // repeats the whole answer as it closes the stream): the cumulative `text`
+    // must not survive into the answer, or a downstream reader of both shapes
+    // counts the answer twice. What is left is an empty `delta`, exactly the
+    // shape the gateway's closing event has. A snapshot may ride along with
+    // other delta fields (a `tool_calls` frame carries its call and the text so
+    // far): those are kept, only the snapshot's own `text` goes.
+    const next = { ...ev, choices: [{ ...choice, delta: { ...asRecord(choice.delta), ...(delta ? { content: delta } : {}) } }] }
+    delete next.choices[0].text
+    return `data: ${JSON.stringify(next)}${l.endsWith("\r") ? "\r" : ""}`
+  }
+  const reader = stream.getReader()
+  return new ReadableStream({
+    async pull(controller) {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) {
+          const rest = pending + dec.decode()
+          pending = ""
+          if (rest) controller.enqueue(enc.encode(rest.split("\n").map(line).join("\n") + "\n"))
+          controller.close()
+          return
+        }
+        pending += dec.decode(value, { stream: true })
+        const cut = pending.lastIndexOf("\n")
+        if (cut < 0) continue
+        const whole = pending.slice(0, cut)
+        pending = pending.slice(cut + 1)
+        controller.enqueue(enc.encode(whole.split("\n").map(line).join("\n") + "\n"))
+        return
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason)
+    },
+  })
+}
+
 /** The JSON payloads of an SSE body, in arrival order, `[DONE]` skipped. */
 function parseSseEvents(text) {
   const events = []
@@ -1205,9 +1305,49 @@ function parseSseEvents(text) {
 
 /** The error code an answer carries (`TM.00001041`, `InferHub.4291.200`, …), or "". */
 function errorCodeOf(text) {
+  const body = String(text ?? "")
   // Any number of named parts before the digits: `InferHub.ModelArts.81111.429`.
-  const m = /"(?:error_code|code)"\s*:\s*"((?:[A-Za-z]+\.)*[A-Za-z]*[0-9][0-9A-Za-z.]*)"/.exec(String(text ?? ""))
-  return m ? m[1] : ""
+  const m = /"(?:error_code|code)"\s*:\s*"((?:[A-Za-z]+\.)*[A-Za-z]*[0-9][0-9A-Za-z.]*)"/.exec(body)
+  if (m) return m[1]
+  // A gateway that writes the code only in its error's own words: the 200-SSE
+  // `{"error":{"message":"… (InferHub.001001005.400)"}}` carries no field.
+  for (const words of errorWordsIn(body)) {
+    const code = bracketedCode(words)
+    if (code) return code
+  }
+  return ""
+}
+
+/**
+ * What the gateway wrote as an error's own words: an `error_msg`, or the
+ * fields of an `error` object (one that is a plain string counts too). Only
+ * these are read for a code, so an answer that happens to name one — its own
+ * words, a log line it quotes — is never taken for an error.
+ */
+function errorWordsIn(body) {
+  const words = []
+  for (const m of body.matchAll(/"error_msg"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) words.push(m[1])
+  for (const m of body.matchAll(/"error"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) words.push(m[1])
+  for (const m of body.matchAll(/"error"\s*:\s*\{([^{}]*)\}/g)) {
+    for (const f of m[1].matchAll(/"(?:message|error_msg|detail|reason)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) words.push(f[1])
+  }
+  return words
+}
+
+/**
+ * The code the gateway put in a message's brackets — `码道 CodeArts: … please
+ * check it (InferHub.001001005.400)`. A code's last dotted part is a long
+ * number (`TM.00001041`, `APIG.0602`), which is what tells it from a version,
+ * a date or any other aside in prose.
+ */
+function bracketedCode(words) {
+  for (const m of String(words ?? "").matchAll(/\(([^()]{1,64})\)/g)) {
+    const token = m[1].trim()
+    if (!/^[A-Za-z0-9]+(\.[A-Za-z0-9]+)+$/.test(token)) continue
+    if (!/^\d{3,}$/.test(token.slice(token.lastIndexOf(".") + 1))) continue
+    return token
+  }
+  return ""
 }
 
 /** The vendor's own words for an error, so the agent can show them. */
@@ -1232,11 +1372,35 @@ function isRateLimitCode(code) {
 }
 
 /**
+ * The refusal `/api/v1` answers for a chat parameter it won't take, in its own
+ * words: one code, `InferHub.001001005.400`, covers a range, a missing field
+ * and the parameters the callers of the OpenAI shape send (measured
+ * 2026-11-14).
+ */
+const GENERIC_PARAM_CODE = "InferHub.001001005.400"
+const GENERIC_PARAM_WORDS = /The request param is invalid, Please check it/i
+
+/**
+ * Is this the generic parameter refusal? Only the code and those words
+ * together say so: the same code without them (`RANGE_VALIDATOR`) is a
+ * validation error of another shape, which another account answers the same
+ * way.
+ */
+function isGenericParamRefusal(code, message = "") {
+  return String(code ?? "") === GENERIC_PARAM_CODE && GENERIC_PARAM_WORDS.test(String(message ?? ""))
+}
+
+/**
  * The status for an error the gateway put inside a 200: 429 for a spent quota
  * or a rate limit (magpie moves to another account), 400 for a model or benefit
  * the account doesn't have (retrying can't help), 502 for the rest.
+ *
+ * `message` is the error's own words, or the body they came in: it is what
+ * tells the generic parameter refusal — which fails over, as the request is
+ * not what's wrong — from the 400s that share its code.
  */
-function embeddedErrorStatus(code) {
+function embeddedErrorStatus(code, message = "") {
+  if (isGenericParamRefusal(code, message)) return 502
   if (isRateLimitCode(code)) return 429
   if (/(^|\.)40[0-4](\.|$)|InferHub\.400[0-9]\./.test(String(code ?? ""))) return 400
   if (isNotMultimodal(code)) return 400
@@ -1257,6 +1421,9 @@ function eventHasContent(event) {
   const choice = Array.isArray(event?.choices) ? event.choices[0] : undefined
   if (!choice) return false
   if (choice.finish_reason != null || choice.message) return true
+  // The gateway's cumulative snapshot shape (`choices[].text`, 2026-11-11): an
+  // answer arrived even though there is no `delta` at all to read.
+  if (typeof choice.text === "string" && choice.text) return true
   const delta = asRecord(choice.delta)
   if (typeof delta.content === "string" && delta.content) return true
   if (typeof delta.reasoning_content === "string" && delta.reasoning_content) return true
@@ -1350,6 +1517,7 @@ function completionFromChunks(events) {
   const content = []
   const reasoning = []
   const toolCalls = []
+  const snapshots = new Map() // choice index → the cumulative text seen before it
   let finish = null
   let usage = null
   let model = first.model
@@ -1359,6 +1527,17 @@ function completionFromChunks(events) {
     const choice = Array.isArray(ev.choices) ? ev.choices[0] : undefined
     if (!choice) continue
     if (choice.finish_reason != null) finish = choice.finish_reason
+    if (typeof choice.text === "string") {
+      // The gateway's cumulative snapshot shape: take only the suffix this
+      // chunk added; a snapshot that is not an extension of the last one
+      // replaces it whole. Without this the fold answers an empty string.
+      const index = Number.isInteger(choice.index) ? choice.index : 0
+      const rec = snapshots.get(index) ?? { last: "", parts: [] }
+      if (!snapshots.has(index)) snapshots.set(index, rec)
+      if (choice.text.startsWith(rec.last)) rec.parts.push(choice.text.slice(rec.last.length))
+      else rec.parts = [choice.text]
+      rec.last = choice.text
+    }
     const delta = asRecord(choice.delta)
     if (typeof delta.content === "string") content.push(delta.content)
     if (typeof delta.reasoning_content === "string") reasoning.push(delta.reasoning_content)
@@ -1370,7 +1549,12 @@ function completionFromChunks(events) {
       if (typeof call.function?.arguments === "string") slot.function.arguments += call.function.arguments
     }
   }
-  const message = { role: "assistant", content: content.join("") }
+  const message = {
+    role: "assistant",
+    // The snapshot shape wins when the gateway sent it; the `delta` shape is
+    // what every other answer (and every other provider) still folds by.
+    content: snapshots.size ? [...snapshots.values()].map((r) => r.parts.join("")).join("") : content.join(""),
+  }
   if (reasoning.length > 0) message.reasoning_content = reasoning.join("")
   const calls = toolCalls.filter(Boolean)
   if (calls.length > 0) message.tool_calls = calls
@@ -1408,13 +1592,16 @@ async function foldAnswer(res, head, names = null) {
     return new Response(body, { status: res.status, statusText: res.statusText, headers })
   }
   const code = errorCodeOf(text)
-  return errorResponse(code ? embeddedErrorStatus(code) : 502, code, firstOf(errorMessageOf(text), "the gateway returned an empty answer"))
+  return errorResponse(code ? embeddedErrorStatus(code, text) : 502, code, firstOf(errorMessageOf(text), "the gateway returned an empty answer"))
 }
 
 /** An OpenAI-shaped error carrying the vendor's code and words (magpie adds the provider name). */
 function errorResponse(status, code, message, extraHeaders = {}) {
+  const said = String(message ?? "")
+  // The gateway usually writes its code in its own words already (`… (InferHub.001001005.400)`): don't say it twice.
+  const suffix = code && !said.includes(code) ? ` (${code})` : ""
   return new Response(
-    JSON.stringify({ error: { message: `${message}${code ? ` (${code})` : ""}`, type: status === 429 ? "rate_limit_exceeded" : "upstream_error", code: code || null } }),
+    JSON.stringify({ error: { message: `${said}${suffix}`, type: status === 429 ? "rate_limit_exceeded" : "upstream_error", code: code || null } }),
     { status, headers: { "content-type": "application/json", ...extraHeaders } },
   )
 }
@@ -1757,7 +1944,11 @@ async function signedFetch(cred, input, init, context) {
         if (!head.code) {
           if (chat.fold) return await foldAnswer(res, head, chat.names)
           handedOver = true
-          const stream = restoreToolNamesInStream(replayBody(head, release), chat.names)
+          // The snapshot rewrite runs first and always: it is the answer's own
+          // shape, and a tool-name pass that skips it (no tool was cut) would
+          // hand the agent the snapshot shape instead of `delta.content`.
+          const replayed = snapshotToDeltaStream(replayBody(head, release))
+          const stream = chat.names ? restoreToolNamesInStream(replayed, chat.names) : replayed
           return new Response(stream, { status: res.status, statusText: res.statusText, headers: streamHeaders(res.headers) })
         }
         text = head.text
@@ -1815,8 +2006,12 @@ async function signedFetch(cred, input, init, context) {
       // an image the model can't take is the request's fault, whatever
       // status it came with
       if (!res.ok && isNotMultimodal(code || text)) return errorResponse(400, code, firstOf(errorMessageOf(text), "the model takes no images"))
+      // The generic parameter refusal is no more the request's fault on a 400
+      // than inside a 200: a 502 has magpie take the next account or model
+      // instead of handing this 400 to the agent as a permanent refusal.
+      if (!res.ok && isGenericParamRefusal(code, text)) return errorResponse(502, code, firstOf(errorMessageOf(text), "the gateway answered with an error"))
       if (!res.ok) return rebuildResponse(res, text)
-      return errorResponse(embeddedErrorStatus(code), code, firstOf(errorMessageOf(text), "the gateway answered with an error"))
+      return errorResponse(embeddedErrorStatus(code, text), code, firstOf(errorMessageOf(text), "the gateway answered with an error"))
     }
   } finally {
     if (!handedOver) release()
@@ -3030,6 +3225,7 @@ export const _internal = {
   toBytes, isBenefitModel, prepareChatBody, signedFetch, signedGet,
   TOOL_NAME_LIMIT, cutToolName, shortenToolNames, restoreToolNames, restoreToolNamesInStream,
   parseSseEvents, errorCodeOf, errorMessageOf, isStaleCredential, isRateLimitCode, embeddedErrorStatus, isNotMultimodal, classifyHead,
+  eventHasContent, snapshotToDeltaStream,
   peekAnswer, completionFromChunks, createConcurrencyGate, delay, retryDelayMs,
   isRegularModel, queueInfoOf, waitInQueue, TRACE_QUEUE_URL, SESSION_HEADER,
   snapRequest, dailyCheckin,

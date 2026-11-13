@@ -1,6 +1,6 @@
 {
   "name": "magpie-officeace",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Huawei Cloud for magpie: OfficeAce (果办) and CodeArts (码道) in one package — OAuth sign-in, live models, credit windows, daily check-in and CodeArts invitations.",
   "type": "module",
   "main": "./index.mjs",
