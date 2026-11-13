@@ -2256,7 +2256,7 @@ async function fetchAgentModels(cred, fetcher, state) {
  * `deepseek-v4.1-flash-1017` and the bare `deepseek-v4.1-flash`) are one
  * model to the reader: magpie shows both names and rates side by side.
  * Keep one — the account's benefit/registered id when it has one, else the
- * bare canonical id — and drop the alias.
+ * dated alias — and drop the bare canonical id.
  */
 function dedupeAliases(models, benefitIds = new Set()) {
   const byBase = new Map()
@@ -2271,7 +2271,7 @@ function dedupeAliases(models, benefitIds = new Set()) {
     const curBenefit = m.benefit === true || benefitIds.has(m.id)
     if (curBenefit && !prevBenefit) byBase.set(base, m)
     else if (prevBenefit) continue
-    else if (m.id === base && prev.id !== base) byBase.set(base, m)
+    else if (m.id !== base && prev.id === base) byBase.set(base, m)
   }
   return [...byBase.values()]
 }

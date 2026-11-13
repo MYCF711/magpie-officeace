@@ -8,14 +8,24 @@ import { _internal as O } from "../index.mjs"
 
 const model = (id, extra = {}) => ({ id, name: id, ...extra })
 
-test("dedupeAliases：相差一个日期后缀的同一模型只留一个（保留裸 id）", () => {
+test("dedupeAliases：没有 benefit 匹配时保留日期后缀 id", () => {
   const out = C.dedupeAliases([model("deepseek-v4.1-flash-1017"), model("deepseek-v4.1-flash")])
-  assert.deepEqual(out.map((m) => m.id), ["deepseek-v4.1-flash"])
+  assert.deepEqual(out.map((m) => m.id), ["deepseek-v4.1-flash-1017"])
+})
+
+test("dedupeAliases：benefit 清单为空且裸 id 在前时也保留日期后缀 id", () => {
+  const out = C.dedupeAliases([model("deepseek-v4.1-flash"), model("deepseek-v4.1-flash-1017")], new Set())
+  assert.deepEqual(out.map((m) => m.id), ["deepseek-v4.1-flash-1017"])
 })
 
 test("dedupeAliases：账号的 benefit/注册 id 优先于裸 id", () => {
   const out = C.dedupeAliases([model("deepseek-v4-flash"), model("deepseek-v4-flash-0731")], new Set(["deepseek-v4-flash-0731"]))
   assert.deepEqual(out.map((m) => m.id), ["deepseek-v4-flash-0731"])
+})
+
+test("dedupeAliases：benefit 指定裸 id 时仍保留裸 id", () => {
+  const out = C.dedupeAliases([model("deepseek-v4.1-flash-1017"), model("deepseek-v4.1-flash")], new Set(["deepseek-v4.1-flash"]))
+  assert.deepEqual(out.map((m) => m.id), ["deepseek-v4.1-flash"])
 })
 
 test("dedupeAliases：不同模型不受影响", () => {
