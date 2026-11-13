@@ -15,6 +15,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
+import { spawnSync } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -302,6 +303,30 @@ test("关窗时进程赖着不走：有界等待后补 SIGKILL，并清掉目录
   assert.equal(result.removedDir, true)
   assert.equal(fs.removeCalls.length, 1)
   assert.equal(_internal.activeTimers(), baseline, "有界等待用的是会清掉的定时器")
+})
+
+test("独立 Node 进程：close 的等待定时器必须 ref，不能在 Linux 空事件循环里提前退出", () => {
+  const moduleUrl = new URL("../src/isolated-login.mjs", import.meta.url).href
+  const source = `
+    import { EventEmitter } from "node:events";
+    import { launchIsolatedLogin, _internal } from ${JSON.stringify(moduleUrl)};
+    const child = new EventEmitter();
+    child.exitCode = null;
+    child.kill = () => true;
+    const h = await launchIsolatedLogin({
+      url: "https://auth.example.test/",
+      browser: { name: "fake", path: "/fake" },
+      spawn: () => { queueMicrotask(() => child.emit("spawn")); return child },
+      startupTimeoutMs: 100,
+      closeTimeoutMs: 20,
+    });
+    const result = await h.close();
+    console.log(JSON.stringify({ killed: result.killed, timers: _internal.activeTimers() }));
+  `
+  // 子进程里除了 close 的 20ms 等待外没有其它句柄：unref 会让它连输出都来不及打印。
+  const run = spawnSync(process.execPath, ["--input-type=module", "-e", source], { encoding: "utf8", timeout: 5000 })
+  assert.equal(run.status, 0, run.stderr)
+  assert.deepEqual(JSON.parse(run.stdout.trim()), { killed: true, timers: 0 })
 })
 
 // ── 失败 / 超时 / 取消 ────────────────────────────────────────────────

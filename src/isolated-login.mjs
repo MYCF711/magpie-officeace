@@ -81,8 +81,8 @@ function startTimer(fn, ms) {
     liveTimers.delete(id)
     fn()
   }, ms)
-  // 即使漏清也不会吊住进程退出；但仍以「清零」为准（测试会查 liveTimers）。
-  id.unref?.()
+  // 启动/关闭都在 await 这个定时器：必须 ref，否则 Linux 在假 child 或无其它句柄时
+  // 会提前结束事件循环（CI 的 cancelledByParent）。settle/close 一定清掉，不会长驻。
   liveTimers.add(id)
   return id
 }

@@ -10,8 +10,8 @@
   profile / Cookie / LocalStorage，也不开 CDP 调试端口；返回 `opened: true`（插件自己开窗，
   宿主不再用系统浏览器）；OAuth 完成 / 失败 / 取消都在 `callback` 的 `finally` 里关掉**本次**
   进程并删除**本次**临时目录；启动失败如实返回失败，不回退日常浏览器，并 `close()` 取消授权码轮询。
-  实现见 `src/isolated-login.mjs`，回归见 `tests/isolated-login.test.mjs`（17 条）、
-  `tests/add-account.test.mjs`（3 条）与 `tests/login-cancel.test.mjs`。
+  实现见 `src/isolated-login.mjs`，回归见 `tests/isolated-login.test.mjs`（18 条，含 Linux 事件循环
+  必须 ref 等待定时器的独立 Node 进程回归）、`tests/add-account.test.mjs`（3 条）与 `tests/login-cancel.test.mjs`。
 - **签到归属写清**：「每日自动签到」开关（magpie 设置 → 用量）与每账号行的「立即签到」按钮
   由 **magpie 宿主**在插件实现 `auth.checkin` 时提供；插件**不写定时器**、**不新增重复开关**，
   只实现 `auth.checkin` 的一次领取（临期先续期；今天已经领过也按最新契约返回 `claimed` + `credit:0`，不重复记账）。

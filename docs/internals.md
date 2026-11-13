@@ -74,11 +74,11 @@ OfficeAce 的 `/v2` 端点要 `Authorization: Basic base64(appKey:appSecret)`，
 - `callback` 的 `finally` 里 `await close()`：`SIGTERM` → 有界等待 3s → 补 `SIGKILL`，然后删本次临时目录；`close` 幂等，只杀自己 spawn 的 child，绝不按进程名 / 端口批量清理；
 - 启动失败（没浏览器 / spawn 抛错 / ENOENT / 5s 超时 / 取消）一律返回 `ok:false` 的**同形句柄**，`callback` 直接 `{type:"failed"}`，**不回退**日常浏览器；同时 `beginLogin.close()` 取消授权码轮询，不留 10 分钟后台循环；
 - `isDailyProfilePath()` 兜底：临时目录如果指向日常 Chrome / Edge / Brave / Vivaldi / 360 / QQ 的 `User Data`、`~/.config/google-chrome`、macOS `Application Support/...`，或 officeace 自己的持久控制台 profile（`~/.cache/magpie/officeace-huawei-<account>/profile`，可用 `MAGPIE_CACHE_DIR` 覆盖），**拒绝启动且绝不删除**那个目录；
-- 不留常驻定时器（`_internal.activeTimers()` 归零）。
+- 启动/关闭所 await 的定时器必须 **ref**：Linux 在没有其它活动句柄时，`unref` 会让事件循环提前结束（CI 曾因此 `cancelledByParent`）；settle/close 一定清掉，最终 `_internal.activeTimers()` 归零，不留常驻定时器。
 
 与 `src/console-browser.mjs` 的分工（别混）：console-browser 是登录**之后**打开 MaaS 控制台，用**持久** profile + `--remote-debugging-port` + CDP 抓 Cookie；本模块是登录**之前**打开 OAuth 授权页，用**一次性** profile、不开调试端口。两者唯一共用 `findBrowser`。
 
-测试：`tests/isolated-login.test.mjs`（17 条，假 spawn / 假 fs / 假 browser）、`tests/add-account.test.mjs`
+测试：`tests/isolated-login.test.mjs`（18 条，假 spawn / 假 fs / 假 browser + 独立 Node 空事件循环回归）、`tests/add-account.test.mjs`
 （3 条：第二入口跳过复用、隔离失败并取消轮询、OAuth 结束后关闭窗口）与 `tests/login-cancel.test.mjs`。
 
 ### 凭据存在哪
