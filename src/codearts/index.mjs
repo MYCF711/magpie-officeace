@@ -50,8 +50,11 @@ import path from "node:path"
 
 // 出站 UA 的唯一来源（officeace 与 codearts 共用一条），见 ../constants.mjs 的注释。
 import { UA } from "../constants.mjs"
+import { confirmInviteByCode, ensureInviteCode, noteAccount, resolveInviteCode, syncAccounts } from "./invite.mjs"
 
 const PROVIDER = "codearts"
+const INVITE_MODE_KEY = "invite_mode"
+const INVITE_INPUT_KEY = "invite"
 
 // 码道 CodeArts 的方形标志（由 OfficeAce 客户端自带素材裁切，128×128 PNG）
 const CODEARTS_ICON =
@@ -1887,6 +1890,16 @@ async function dailyCampaign(cred, fetcher) {
 
 const isClaimedToday = (item) => !item?.claimable && CLAIMED_STATUSES.includes(item?.status)
 
+/**
+ * The day's benefit is already in the account — claimed here a moment ago, by
+ * the IDE, or by another magpie. Report `claimed` so magpie stamps the day, but
+ * `credit: 0`: this call claimed nothing new (scaffold 0.3.13). No grant is
+ * recorded and no streak is invented — a fresh claim carries the real amount.
+ */
+function alreadyClaimedToday(item) {
+  return { outcome: "claimed", credit: 0, message: "今天已领取" }
+}
+
 // ---- credit batches and when they lapse ------------------------------------
 
 const PACKAGE_TYPE_METRICS = {
@@ -2067,10 +2080,10 @@ async function dailyCheckin(cred, fetcher, { unconfirmed } = {}) {
     const confirmed = await snapRequest("POST", OPS_CONFIRM_URL, cred, fetcher, { campaignId: item.campaignId })
     if (confirmed.ok) return claimedOutcome(asRecord(unconfirmed.benefit), credit)
     const again = await dailyCampaign(cred, fetcher)
-    if (isClaimedToday(again.item) && again.item.status !== "CLAIMED") return { outcome: "done", message: "今天已领取" }
+    if (isClaimedToday(again.item) && again.item.status !== "CLAIMED") return alreadyClaimedToday(again.item)
     return { outcome: "failed", message: `领取确认失败：${confirmed.message}` }
   }
-  if (isClaimedToday(item)) return { outcome: "done", message: "今天已领取" }
+  if (isClaimedToday(item)) return alreadyClaimedToday(item)
   if (!item.claimable) return { outcome: "ineligible", message: `当前不可领取（status=${item.status ?? "null"}）` }
   if (!campaign) return { outcome: "failed", message: "活动缺少 campaignId" }
 
@@ -2078,7 +2091,7 @@ async function dailyCheckin(cred, fetcher, { unconfirmed } = {}) {
   if (!claimed.ok) {
     // Claimed elsewhere a moment ago (the IDE, another magpie): look again.
     const again = await dailyCampaign(cred, fetcher)
-    if (isClaimedToday(again.item)) return { outcome: "done", message: "今天已领取" }
+    if (isClaimedToday(again.item)) return alreadyClaimedToday(again.item)
     return { outcome: "failed", message: `领取失败：${claimed.message}` }
   }
   const benefit = asRecord(claimed.data)
@@ -2490,7 +2503,8 @@ function usageFromStatistics(raw, benefitRaw, { batches, grants, benefitIds } = 
 
 // ---- the plugin -------------------------------------------------------------
 
-export const CodeArtsAuthPlugin = async ({ client } = {}, options = {}) => {
+export const CodeArtsAuthPlugin = async (_ctx = {}, options = {}) => {
+  const client = _ctx.client
   const fetcher = typeof options?.fetch === "function" ? options.fetch : fetch
   // Tunables (magpie: `magpie plugin options <name> '{…}'`). `maxInflight` can
   // only lower the gate: above 3 the account would pass the vendor's cap.
@@ -2509,6 +2523,42 @@ export const CodeArtsAuthPlugin = async ({ client } = {}, options = {}) => {
   // Test hooks: the clock and the sleep the retry budget runs on.
   const now = typeof options?.now === "function" ? options.now : Date.now
   const sleep = typeof options?.sleep === "function" ? options.sleep : delay
+
+  // CodeArts 独有的邀请能力。测试注入 fetch 时默认关闭，只有显式给邀请目录/文件才开启，
+  // 避免既有测试读真实账号或写真实缓存；生产运行时始终启用并使用 ~/.cache/magpie。
+  const inviteEnabled = typeof options?.fetch !== "function" || options?.invite === true ||
+    options?.inviteCacheDir !== undefined || options?.inviteAuthFile !== undefined
+  const inviteCacheDir = options?.inviteCacheDir ?? (typeof options?.fetch === "function" ? false : undefined)
+  const inviteModeOn = () => {
+    try { return _ctx?.magpie?.option?.(PROVIDER, INVITE_MODE_KEY) === true } catch { return false }
+  }
+  const invitePrompt = () => ({
+    type: "text",
+    key: INVITE_INPUT_KEY,
+    message: "邀请码（可留空：自动用最新账号 / magpie 首选账号）",
+    placeholder: "留空或 0 / 1 = 自动；填写后保存为预留邀请码",
+  })
+  const inviteAccounts = () => syncAccounts({
+    authFile: options?.inviteAuthFile,
+    loginsFile: options?.inviteLoginsFile,
+    cacheDir: inviteCacheDir,
+  })
+  const localInviteCode = (inputs) => {
+    if (!inviteEnabled) return { code: "", source: "none" }
+    const synced = inviteAccounts()
+    const selected = resolveInviteCode({
+      mode: inviteModeOn(),
+      reservedInput: inputs?.[INVITE_INPUT_KEY],
+      preferredUid: synced.preferredUid,
+      accounts: synced.accounts,
+      cacheDir: inviteCacheDir,
+    })
+    return {
+      ...selected,
+      // 登录前已存在的账号重登不再确认邀请；真正的新账号才走 confirm-by-code。
+      knownUids: new Set(synced.accounts.filter((a) => a.present !== false).map((a) => a.uid)),
+    }
+  }
 
   // Per account, shared by every loader this process runs for it and by
   // nothing else: the gate; its free models today (null until its
@@ -2632,6 +2682,23 @@ export const CodeArtsAuthPlugin = async ({ client } = {}, options = {}) => {
       refreshLead: REFRESH_LEAD_MS,
       // The gateway's own cap: more in flight only queues in the plugin.
       maxConcurrency: maxInflight,
+
+      options: [
+        {
+          key: INVITE_MODE_KEY,
+          label: "邀请模式",
+          description:
+            "关闭时自动使用最新注册账号的邀请链接（最新还没码则生成，失败回退上一个可用账号，都没有才用你预留的邀请码）；" +
+            "开启时使用 magpie 账号页的首选账号（账号行「Make first」）作为邀请源，仅新注册账号可建立邀请关系。",
+          labels: { zh: "邀请模式", en: "Invite mode" },
+          descriptions: {
+            zh: "关闭时自动使用最新注册账号的邀请链接；开启时只使用 magpie 首选账号（Make first）。没有可用链接时回退预留邀请码，仅新注册账号可建立邀请关系。",
+            en: "Off: use the newest account's invite link, falling back to an older usable account and then your reserved code. On: use only the magpie Make first account. Invitations apply only to new registrations.",
+          },
+          default: false,
+          placement: "top",
+        },
+      ],
 
       // magpie's own hook: renew the temporary credentials before they expire.
       async refresh(auth) {
@@ -2796,7 +2863,7 @@ export const CodeArtsAuthPlugin = async ({ client } = {}, options = {}) => {
         const left = held ?? readUnconfirmed(ledgerPath, key)
         const { grant, unconfirmed, ...r } = await dailyCheckin(cred, fetcher, { unconfirmed: left })
         // A claim whose confirm failed is kept for the next check-in; one
-        // confirmed now, or found done, is dropped.
+        // confirmed now, or found already claimed, is dropped.
         if (unconfirmed) {
           state.unconfirmed = { ...unconfirmed, day: today }
           recordUnconfirmed(ledgerPath, key, unconfirmed)
@@ -2817,7 +2884,29 @@ export const CodeArtsAuthPlugin = async ({ client } = {}, options = {}) => {
         {
           type: "oauth",
           label: "Sign in with Huawei Cloud",
-          async authorize() {
+          get prompts() { return [invitePrompt()] },
+          async ask(inputs) {
+            if (!inputs || !Object.prototype.hasOwnProperty.call(inputs, INVITE_INPUT_KEY)) return invitePrompt()
+            if (inviteEnabled) {
+              try {
+                // 只有 ask 可以联网取码/生成；authorize 不再做邀请源的网络读取。
+                await ensureInviteCode({
+                  preferFirst: inviteModeOn(),
+                  reservedInput: inputs?.[INVITE_INPUT_KEY],
+                  request: snapRequest,
+                  fetcher,
+                  cacheDir: inviteCacheDir,
+                  authFile: options?.inviteAuthFile,
+                  loginsFile: options?.inviteLoginsFile,
+                })
+              } catch {
+                // 邀请只是附加能力，失败继续裸登录，绝不阻断 OAuth。
+              }
+            }
+            return null
+          },
+          async authorize(inputs = {}) {
+            const invite = localInviteCode(inputs)
             const flow = await startLoginFlow(fetcher)
             return {
               url: flow.loginUrl,
@@ -2838,6 +2927,19 @@ export const CodeArtsAuthPlugin = async ({ client } = {}, options = {}) => {
                   // record hands the other one a credential that still has it.
                   const withMaas = await withOfficeAceMaas(identified, fetcher)
                   const identity = accountIdentityOf(withMaas)
+                  if (inviteEnabled && identity.id) {
+                    noteAccount({ uid: identity.id, accountId: identity.id, cacheDir: inviteCacheDir })
+                  }
+                  if (inviteEnabled && invite.code && (!identity.id || !invite.knownUids?.has(identity.id))) {
+                    try {
+                      const confirmed = await confirmInviteByCode({ cred: withMaas, code: invite.code, request: snapRequest, fetcher })
+                      if (!confirmed.ok) {
+                        client?.app?.log?.({ service: "codearts", level: "warn", message: "自动邀请未确认（登录本身已成功）" })
+                      }
+                    } catch {
+                      // 只有新注册账号能建立邀请关系；旧号重登或确认失败不影响登录结果。
+                    }
+                  }
                   // `accountId` is the account's identity — the URN, as main
                   // gives it — so a re-sign-in replaces the account instead of
                   // adding a `codearts#xxxxxx`; `uid` is that same URN.

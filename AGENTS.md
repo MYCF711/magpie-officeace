@@ -58,11 +58,13 @@ curl -s "https://usemagpie.ai/api/latest?channel=stable" | grep -o '"version":"[
 | 8 | 模型名后面多出空白 / 匹配不上 | 上游 `model_name` 带**尾部换行**（`"kimi-k3\n"`），必须 `trim` | internals 模型 |
 | 9 | 额度条数字不对、或把试用额度当成永久额度 | 额度分**三桶**；`.trial` 后缀桶不带到期时间（不猜、照实显示）；已过期桶标 `aside: true` 收进折叠区 | internals 额度分桶 |
 | 10 | 额度查询一失败，整张卡片空白 | 查询失败**不吞**：带原因抛出，由调用方显示；静默变 0 会被当成空号排到队首 | internals 额度分桶 |
-| 11 | 签到明明成功，界面却显示「今天已领」/ 反之 | 重复领取是**幂等**的：服务端 2xx 且 `bonus_skus` 为空 = `done`（今天领完），不是失败 | internals 额度分桶 |
+| 11 | 签到明明成功，界面却显示「今天已领」/ 反之 | 重复领取是**幂等**的：服务端 2xx 且 `bonus_skus` 为空 = `claimed` + `credit:0`（今天已领取、本次无新增，宿主才盖当天时间戳）；不重复记账、不编造 streak | internals 额度分桶 · scaffold 0.3.13 |
 | 12 | `magpie plugin add xxx.tgz` 报 `exports no OpenCode plugin function` | 这个命令把 tgz 当 JS 模块 `import()`，**用不了**；本地包要走 `plugins.json` + `plugins/package.json` 登记 | README 安装段 |
 | 13 | 改了代码重装，行为没变 | 同版本号重打包会命中 bun 缓存 —— 必须 bump `version` | 脚手架 UPDATING 第 1 步 |
 | 14 | 想让卡片标题 / 许可 / 「源码」按钮对，去改了 magpie 的缓存 | 插件对 magpie 目录**只有读的份**；唯一载体是 `registry-entry.json` | internals 卡片标题 |
 | 15 | **上游偶发或固定回 403 `TM.00000001`（文案是「网络繁忙，请稍后重试」），重试和换账号都没用**；或者某个 provider 换到新网络 / 新账号后就不通 | 每个打上游的 `fetch` 都**显式**带 `User-Agent`，值是**该服务官方客户端**的 UA —— 绝不写 `<包名>/<版本号>`，也绝不让宿主的 `magpie/<version>` 透传（插件不设 UA 时它就这么上去）。官方是网页就用完整 Chrome UA；有 App / CLI 客户端就用那个客户端的 UA。判据：`node scripts/check-ua.mjs` 退出 0（模板坑表第 38 条） | README「3. User-Agent 常常是硬校验」· `scripts/check-ua.mjs` |
+| 16 | 已有健康账号时点添加仍换回旧账号 | 第二入口「添加其他华为云账号」不做复用探测，并且自己开一次性隔离 Chromium、返回 `opened: true`；只返回 `url` 会再次落到日常浏览器（Issue #31 / PR #37） | `index.mjs` · `src/isolated-login.mjs` |
+| 17 | 邀请开关不出现、拨了不生效或邀请挂到别的账号 | 仅 CodeArts 声明 `invite_mode`（`placement:"top"`、使用点实时读）；联网取码只在 `ask()`，off 最新 / on Make first（首选失败只回预留）；generate body 用 `channel:"WEB"`，新账号 OAuth 成功后才 `confirm-by-code` | `src/codearts/invite.mjs` · `tests/codearts-invite-wire.test.mjs` |
 
 ---
 

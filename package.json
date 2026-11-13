@@ -1,7 +1,7 @@
 {
   "name": "magpie-officeace",
   "version": "0.2.9",
-  "description": "Huawei Cloud for magpie: OfficeAce (果办) and CodeArts (码道) in one package — OAuth sign-in, live model catalog, credit windows and daily check-in where the product supports it.",
+  "description": "Huawei Cloud for magpie: OfficeAce (果办) and CodeArts (码道) in one package — OAuth sign-in, live models, credit windows, daily check-in and CodeArts invitations.",
   "type": "module",
   "main": "./index.mjs",
   "exports": "./index.mjs",
@@ -57,8 +57,8 @@
     "maxConcurrency": 3,
     "name": "华为云 HUAWEI",
     "summary": {
-      "zh": "华为云双 provider：OfficeAce（果办）与 CodeArts（码道）一个包接入，OAuth 登录、实时模型目录、积分窗口与每日签到。",
-      "en": "Huawei Cloud in one package: OfficeAce and CodeArts — OAuth sign-in, a live model catalog, credit windows and daily check-in where the product supports it."
+      "zh": "华为云双 provider：OfficeAce（果办）与 CodeArts（码道）一个包接入，OAuth 登录、实时模型目录、积分窗口、每日签到与 CodeArts 自动邀请。",
+      "en": "Huawei Cloud in one package: OfficeAce and CodeArts — OAuth sign-in, live models, credit windows, daily check-in and CodeArts invitations."
     }
   }
 }

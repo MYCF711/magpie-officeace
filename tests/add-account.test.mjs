@@ -34,6 +34,7 @@ test("添加其他华为云账号：已有健康凭据也直接起新 OAuth，�
   let loginCalls = 0
   let fetchCalls = 0
   let clientProbes = 0
+  let isolatedCalls = 0
   const plugin = await OfficeAceAuthPlugin({}, {
     authFile,
     fetch: async () => {
@@ -48,12 +49,52 @@ test("添加其他华为云账号：已有健康凭据也直接起新 OAuth，�
       loginCalls++
       return { url: "https://auth.huaweicloud.com/authui/login.html?service=add-account", result: new Promise(() => {}) }
     },
+    isolatedLogin: async ({ url }) => {
+      isolatedCalls++
+      assert.equal(url, "https://auth.huaweicloud.com/authui/login.html?service=add-account")
+      return { ok: true, close: async () => {} }
+    },
   })
 
   const a = await plugin.auth.methods[1].authorize()
   assert.equal(a.url, "https://auth.huaweicloud.com/authui/login.html?service=add-account")
+  assert.equal(a.opened, true, "opened:true 抑制宿主再次用系统浏览器打开")
   assert.equal(a.method, "auto")
+  assert.equal(isolatedCalls, 1)
   assert.equal(loginCalls, 1)
   assert.equal(fetchCalls, 0)
   assert.equal(clientProbes, 0)
+})
+
+test("隔离窗口启动失败：callback 如实失败，不退回日常浏览器，并取消轮询", async () => {
+  let loginClosed = 0
+  const plugin = await OfficeAceAuthPlugin({}, {
+    authFile: path.join(os.tmpdir(), "officeace-no-such-auth-file.json"),
+    beginLogin: async () => ({
+      url: "https://auth.huaweicloud.com/authui/login.html",
+      result: new Promise(() => {}),
+      close: () => { loginClosed++ },
+    }),
+    isolatedLogin: async () => ({ ok: false, error: "未找到 Chromium", close: async () => {} }),
+  })
+  const a = await plugin.auth.methods[1].authorize()
+  assert.equal(a.url, "https://auth.huaweicloud.com/authui/login.html")
+  assert.equal(a.opened, true)
+  assert.deepEqual(await a.callback(), { type: "failed", error: "未找到 Chromium" })
+  assert.equal(loginClosed, 1)
+})
+
+test("OAuth 结束后关闭本次隔离窗口", async () => {
+  let closed = 0
+  const plugin = await OfficeAceAuthPlugin({}, {
+    authFile: path.join(os.tmpdir(), "officeace-no-such-auth-file.json"),
+    beginLogin: async () => ({
+      url: "https://auth.huaweicloud.com/authui/login.html",
+      result: Promise.reject(new Error("登录已取消")),
+    }),
+    isolatedLogin: async () => ({ ok: true, close: async () => { closed++ } }),
+  })
+  const a = await plugin.auth.methods[1].authorize()
+  assert.deepEqual(await a.callback(), { type: "failed", error: "登录已取消" })
+  assert.equal(closed, 1)
 })

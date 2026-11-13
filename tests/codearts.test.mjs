@@ -2157,9 +2157,11 @@ test("checkin claims and confirms the daily benefit the way the IDE does", async
     assert.equal(c.headers.get("agent-type"), "PromptCenter")
     assert.equal(auth.split("SignedHeaders=")[1].split(",")[0].includes("agent-type"), false)
   }
-  // Asked again the same day: in already, and nothing is claimed twice.
+  // Asked again the same day: still reported as claimed with zero new credit,
+  // and nothing is claimed or recorded twice.
   const again = await plugin.auth.checkin(async () => makeAuth(cred))
-  assert.equal(again.outcome, "done")
+  assert.deepEqual(again, { outcome: "claimed", credit: 0, message: "今天已领取" })
+  assert.equal("grant" in again, false, "the second answer must not record a grant")
   assert.equal(calls.filter((c) => c.url === x.OPS_CLAIM_URL).length, 1)
 })
 
@@ -2219,19 +2221,24 @@ test("checkin confirms the claim it left unconfirmed, and tries again later when
   assert.deepEqual(first, { outcome: "failed", message: "领取确认失败：HTTP 502" })
   assert.deepEqual(unconfirmed, { campaignId: 1, benefit: { id: 42, benefitAmount: 1000 } })
   assert.equal(s.item.status, "CLAIMED")
-  // Later that day, told what it left: it is confirmed now, not taken as done.
+  // Later that day, told what it left: it is confirmed now, not a new claim.
   const { fetcher, calls } = opsFetcher(s)
   const { grant, ...again } = await x.dailyCheckin(cred, fetcher, { unconfirmed })
   assert.deepEqual(again, { outcome: "claimed", credit: 1000, message: "+1000 积分" })
   assert.equal(grant.credit, 1000)
   assert.deepEqual(calls.map((c) => [c.method, c.url]), [["GET", x.OPS_DELIVERY_URL], ["POST", x.OPS_CONFIRM_URL]])
   assert.deepEqual(calls[1].body, { campaignId: 1 })
-  assert.equal((await x.dailyCheckin(cred, fetcher, { unconfirmed })).outcome, "done")
+  assert.deepEqual(await x.dailyCheckin(cred, fetcher, { unconfirmed }), { outcome: "claimed", credit: 0, message: "今天已领取" })
   // A claimed activity it didn't leave unconfirmed, or another campaign's, is
-  // done, and nothing is confirmed: the IDE leaves `id: null` claims so.
+  // claimed too (the day has a benefit, nothing to confirm: the IDE leaves
+  // `id: null` claims so).
   for (const left of [undefined, { campaignId: 9 }]) {
     const notOurs = opsFetcher({ item: daily({ claimable: false, status: "CLAIMED" }) })
-    assert.equal((await x.dailyCheckin(cred, notOurs.fetcher, { unconfirmed: left })).outcome, "done")
+    assert.deepEqual(await x.dailyCheckin(cred, notOurs.fetcher, { unconfirmed: left }), {
+      outcome: "claimed",
+      credit: 0,
+      message: "今天已领取",
+    })
     assert.deepEqual(notOurs.calls.map((c) => c.url), [x.OPS_DELIVERY_URL])
   }
   // A confirm the vendor turns down while the activity is still only claimed
@@ -2244,13 +2251,17 @@ test("checkin confirms the claim it left unconfirmed, and tries again later when
     assert.match(r.message, /^领取确认失败：/)
     assert.deepEqual(still.calls.map((c) => c.method), ["GET", "POST", "GET"], "the activity is looked at again")
   }
-  // Turned down because it was confirmed meanwhile (the IDE): done.
+  // Turned down because it was confirmed meanwhile (the IDE): claimed.
   const elsewhere = (st) => {
     st.item = { ...st.item, status: "CONFIRMED" }
     return new Response(JSON.stringify({ code: 1002, message: "already confirmed" }), { status: 200 })
   }
   const meanwhile = opsFetcher({ item: daily({ claimable: false, status: "CLAIMED" }) }, { confirm: elsewhere })
-  assert.equal((await x.dailyCheckin(cred, meanwhile.fetcher, { unconfirmed })).outcome, "done")
+  assert.deepEqual(await x.dailyCheckin(cred, meanwhile.fetcher, { unconfirmed }), {
+    outcome: "claimed",
+    credit: 0,
+    message: "今天已领取",
+  })
 })
 
 test("a failed confirm is still made by the next check-in when the ledger can't be written", async () => {
@@ -2273,7 +2284,7 @@ test("a failed confirm is still made by the next check-in when the ledger can't 
   assert.equal(fs.existsSync(ledgerPath), false)
   assert.equal((await plugin.auth.checkin(async () => makeAuth(cred))).outcome, "claimed")
   assert.equal(confirms, 2)
-  assert.equal((await plugin.auth.checkin(async () => makeAuth(cred))).outcome, "done")
+  assert.equal((await plugin.auth.checkin(async () => makeAuth(cred))).outcome, "claimed")
   assert.equal(confirms, 2)
 })
 
@@ -2292,7 +2303,7 @@ test("a claim answering no id is never confirmed, however many check-ins follow 
     const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: ops.fetcher, ledgerPath })
     outcomes.push((await plugin.auth.checkin(async () => makeAuth(cred))).outcome)
   }
-  assert.deepEqual(outcomes, ["claimed", "done", "done"])
+  assert.deepEqual(outcomes, ["claimed", "claimed", "claimed"])
   assert.equal(ops.calls.filter((c) => c.url === x.OPS_CONFIRM_URL).length, 0, "no confirm the IDE wouldn't send")
   const [grants] = Object.entries(JSON.parse(fs.readFileSync(ledgerPath, "utf8"))).filter(([k]) => !k.startsWith("_")).map(([, v]) => v)
   assert.equal(grants.length, 1, "one grant, not one per check-in")
@@ -2320,15 +2331,15 @@ test("a confirm that failed is made by the next check-in, in another magpie too,
   assert.deepEqual(await checkin(), { outcome: "claimed", credit: 1000, message: "+1000 积分" })
   assert.equal(confirms, 2)
   assert.deepEqual(JSON.parse(fs.readFileSync(ledgerPath, "utf8"))._unconfirmed, {}, "confirmed, so forgotten")
-  assert.equal((await checkin()).outcome, "done")
+  assert.deepEqual(await checkin(), { outcome: "claimed", credit: 0, message: "今天已领取" })
   assert.equal(confirms, 2)
 })
 
-test("checkin tells done, inactive and ineligible apart", async () => {
+test("checkin tells claimed-already, inactive and ineligible apart", async () => {
   const cred = await makeCred()
   for (const status of ["CONFIRMED", "CONSUMED"]) {
     const { fetcher, calls } = opsFetcher({ item: daily({ claimable: false, status }) })
-    assert.equal((await x.dailyCheckin(cred, fetcher)).outcome, "done")
+    assert.deepEqual(await x.dailyCheckin(cred, fetcher), { outcome: "claimed", credit: 0, message: "今天已领取" })
     assert.equal(calls.length, 1)
   }
   assert.equal((await x.dailyCheckin(cred, opsFetcher({}).fetcher)).outcome, "inactive")
@@ -2342,7 +2353,11 @@ test("checkin looks again after a refused claim, and reports a real failure", as
     s.item = { ...s.item, claimable: false, status: "CLAIMED" } // claimed elsewhere meanwhile
     return new Response(JSON.stringify({ code: 1001, message: "already claimed" }), { status: 200 })
   }
-  assert.equal((await x.dailyCheckin(cred, opsFetcher({ item: daily() }, { claim: refused }).fetcher)).outcome, "done")
+  assert.deepEqual(await x.dailyCheckin(cred, opsFetcher({ item: daily() }, { claim: refused }).fetcher), {
+    outcome: "claimed",
+    credit: 0,
+    message: "今天已领取",
+  })
 
   const boom = () => new Response(JSON.stringify({ code: 500, message: "活动太火爆" }), { status: 200 })
   const failed = await x.dailyCheckin(cred, opsFetcher({ item: daily() }, { claim: boom }).fetcher)
@@ -2356,6 +2371,51 @@ test("checkin looks again after a refused claim, and reports a real failure", as
 test("checkin without a sign-in fails without calling the vendor", async () => {
   const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: async () => { throw new Error("no network") } })
   assert.deepEqual(await plugin.auth.checkin(async () => ({ type: "api", key: "k" })), { outcome: "failed", message: "not signed in" })
+})
+
+test("already claimed today: claimed with zero new credit, no grant and no streak", async () => {
+  const cred = await makeCred()
+  const ledgerPath = path.join(ledgerDir, "already-claimed.json")
+  const ops = opsFetcher({ item: daily({ claimable: false, status: "CONFIRMED" }) })
+  const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: ops.fetcher, ledgerPath })
+  const r = await plugin.auth.checkin(async () => makeAuth(cred))
+  assert.deepEqual(r, { outcome: "claimed", credit: 0, message: "今天已领取" })
+  assert.equal("grant" in r, false, "已领取不再记一笔 grant")
+  assert.equal("streak" in r, false, "streak 只有厂商给了才报，不编")
+  assert.equal(fs.existsSync(ledgerPath), false, "没有新领取就不写账本")
+  assert.equal(ops.calls.filter((c) => c.url === x.OPS_CLAIM_URL).length, 0, "已领取不再 POST claim")
+})
+
+test("a claim refused as already claimed reports claimed, and only one claim POST went out", async () => {
+  const cred = await makeCred()
+  const refused = (s) => {
+    s.item = { ...s.item, claimable: false, status: "CLAIMED" } // claimed elsewhere meanwhile
+    return new Response(JSON.stringify({ code: 1001, message: "already claimed" }), { status: 200 })
+  }
+  const { fetcher, calls } = opsFetcher({ item: daily() }, { claim: refused })
+  const r = await x.dailyCheckin(cred, fetcher)
+  assert.deepEqual(r, { outcome: "claimed", credit: 0, message: "今天已领取" })
+  assert.equal("grant" in r, false, "别处领到的不能记成本次赠予")
+  assert.equal(calls.filter((c) => c.url === x.OPS_CLAIM_URL).length, 1, "只发过一次 claim")
+  assert.equal(calls.filter((c) => c.url === x.OPS_DELIVERY_URL).length, 2, "领取失败后重查一次活动")
+})
+
+test("checking in twice records the day's grant once, and still POSTs claim once", async () => {
+  const cred = await makeCred()
+  const ledgerPath = path.join(ledgerDir, "twice.json")
+  const ops = opsFetcher({ item: daily() })
+  const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: ops.fetcher, ledgerPath })
+  const first = await plugin.auth.checkin(async () => makeAuth(cred))
+  assert.equal(first.outcome, "claimed")
+  assert.equal(first.credit, 1000)
+  const second = await plugin.auth.checkin(async () => makeAuth(cred))
+  assert.deepEqual(second, { outcome: "claimed", credit: 0, message: "今天已领取" })
+  assert.equal("grant" in second, false, "重复调用不再产生赠予记录")
+  assert.equal(ops.calls.filter((c) => c.url === x.OPS_CLAIM_URL).length, 1, "重复调用仍只 POST claim 一次")
+  const ledger = JSON.parse(fs.readFileSync(ledgerPath, "utf8"))
+  const accounts = Object.entries(ledger).filter(([k]) => !k.startsWith("_"))
+  assert.equal(accounts.length, 1, "一个账号一条记录")
+  assert.equal(accounts[0][1].length, 1, "只有首次领取记了一笔")
 })
 
 // ---- OAuth callback server -------------------------------------------------
