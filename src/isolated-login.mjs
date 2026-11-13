@@ -151,11 +151,11 @@ export function normalizeBrowser(browser) {
   if (browser === null || browser === undefined) return null
   if (typeof browser === "string") {
     const path = browser.trim()
-    return path === "" ? null : { name: basename(path), path }
+    return path === "" ? null : { name: basename(path.replaceAll("\\", "/")), path }
   }
   if (typeof browser === "object" && typeof browser.path === "string" && browser.path.trim() !== "") {
     const path = browser.path.trim()
-    return { name: typeof browser.name === "string" && browser.name !== "" ? browser.name : basename(path), path }
+    return { name: typeof browser.name === "string" && browser.name !== "" ? browser.name : basename(path.replaceAll("\\", "/")), path }
   }
   return null
 }

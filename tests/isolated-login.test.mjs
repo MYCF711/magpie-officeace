@@ -432,7 +432,7 @@ test("未显式给 browser 时用注入的 findBrowser 发现路径，字符串�
   assert.equal(h.ok, true)
   assert.equal(sp.calls[0].command, "C:\\fake\\bin\\chrome.exe")
   assert.equal(h.browser.path, "C:\\fake\\bin\\chrome.exe")
-  assert.ok(typeof h.browser.name === "string" && h.browser.name.includes("chrome.exe"))
+  assert.equal(h.browser.name, "chrome.exe", "Windows 路径在 POSIX 上也要只取文件名")
   await h.close()
 
   // 纯函数的三种形状
