@@ -233,6 +233,40 @@ test("prepareChatBody reshapes a chat into what the gateway accepts and meters",
   assert.equal(x.prepareChatBody(null), null)
 })
 
+test("MAX_OUTPUT_TOKENS pins the /api/v1 output range at 32000", () => {
+  // Measured against the live gateway on 2026-11-13 (deepseek-v4.1-flash,
+  // kimi-k3.1-pro, glm-5.3, openpangu-2.0-pro): 32000 answers 200, 32001..32768
+  // answer 400 `InferHub.001001005.400` in ~0.3 s. The model catalog's 65536 is
+  // the /api/v2 budget; a future edit that swings the clamp back turns this red.
+  assert.equal(x.MAX_OUTPUT_TOKENS, 32000)
+  const big = x.prepareChatBody({ model: "GLM-5.2", messages: [], max_tokens: 65536 })
+  assert.equal(big.body.max_tokens, 32000)
+  const completion = x.prepareChatBody({ model: "GLM-5.2", messages: [], max_completion_tokens: 131072 })
+  assert.equal(completion.body.max_completion_tokens, 32000)
+  const edge = x.prepareChatBody({ model: "GLM-5.2", messages: [], max_tokens: 32001 })
+  assert.equal(edge.body.max_tokens, 32000)
+})
+
+test("prepareChatBody drops the parameters /api/v1 refuses outright", () => {
+  // Measured 2026-11-13 on the same account: `seed` outside {0, 1} and `stop`
+  // as an array answer 400 `InferHub.001001005.400` (even `stop: []`), while
+  // `seed: 0/1` and `stop: "x"` answer 200.
+  const seed = x.prepareChatBody({ model: "GLM-5.2", messages: [], seed: 42 })
+  assert.equal("seed" in seed.body, false)
+  assert.equal(x.prepareChatBody({ model: "GLM-5.2", messages: [], seed: 0 }).body.seed, 0)
+  assert.equal(x.prepareChatBody({ model: "GLM-5.2", messages: [], seed: 1 }).body.seed, 1)
+  assert.equal(x.prepareChatBody({ model: "GLM-5.2", messages: [], seed: "1" }).body.seed, undefined)
+
+  const single = x.prepareChatBody({ model: "GLM-5.2", messages: [], stop: ["\n"] })
+  assert.equal(single.body.stop, "\n")
+  const multi = x.prepareChatBody({ model: "GLM-5.2", messages: [], stop: ["a", "b"] })
+  assert.equal("stop" in multi.body, false)
+  const empty = x.prepareChatBody({ model: "GLM-5.2", messages: [], stop: [] })
+  assert.equal("stop" in empty.body, false)
+  const str = x.prepareChatBody({ model: "GLM-5.2", messages: [], stop: "x" })
+  assert.equal(str.body.stop, "x")
+})
+
 // The free model's TPM limit, word for word as the gateway sent it in a 200.
 const tpmEvent = 'data:{"text":"[DONE]","error_code":"InferHub.ModelArts.81111.429","error_msg":"The model TPM limit has been significantly exceeded. Please reduce the request rate and retry later."}'
 
@@ -862,6 +896,170 @@ test("a folded answer keeps reasoning, tool calls and usage apart", async () => 
   assert.deepEqual(json.usage, { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 })
 })
 
+// ---- the gateway's cumulative snapshot stream (2026-11-11) ------------------
+//
+// Measured on the live gateway: every chunk of a chat answer carries
+// `choices[].text` — a CUMULATIVE snapshot of the whole answer so far — and no
+// `delta` at all. A reader that folds only `delta.*` answers an empty string,
+// and the agent's next turn then goes out as two consecutive user messages,
+// which the gateway refuses with the same `InferHub.001001005.400`. The events
+// below are that shape, word for word: the stream opens with an empty snapshot
+// and repeats the whole answer as it closes.
+
+const snapshotEvent = (text, extra = {}) => ({ id: "c1", choices: [{ index: 0, text, ...extra }] })
+const snapshotStream = (...snapshots) =>
+  sse(
+    ...snapshots.map((s) => snapshotEvent(s)),
+    { id: "c1", choices: [{ index: 0, finish_reason: "stop" }] },
+    "[DONE]",
+  )
+const readStream = async (res) => {
+  const dec = new TextDecoder()
+  let out = ""
+  for await (const chunk of res.body) out += dec.decode(chunk, { stream: true })
+  return out
+}
+// Only the events that carry a `delta`: a keepalive or an untouched closing
+// event has none, exactly as in the `delta` shape.
+const deltasOf = (text) =>
+  text
+    .split("\n")
+    .filter((l) => l.startsWith("data:") && !l.includes("[DONE]"))
+    .map((l) => JSON.parse(l.slice(5).trim()).choices?.[0])
+    .filter((c) => c && c.delta)
+    .map((c) => c.delta.content ?? "")
+
+test("a folded answer takes the cumulative snapshots, not an empty delta", async () => {
+  const cred = await makeCred()
+  // The measured shape: "1,", "1, 2, 3,", then the answer repeated as it closes.
+  const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: async () => sseResponse(snapshotStream("1, ", "1, 2, 3, ", "1, 2, 3, 4", "1, 2, 3, 4")) })
+  const loaded = await plugin.auth.loader(async () => makeAuth(cred))
+  const res = await loaded.fetch(CHAT_URL, chatInit({ model: "GLM-5.2", messages: [{ role: "user", content: "count" }], stream: false }))
+  assert.equal(res.headers.get("content-type"), "application/json")
+  const json = await res.json()
+  // The bug: the old fold answered "" here, and every following turn carried an
+  // empty assistant message. A repeated snapshot must not repeat the answer.
+  assert.equal(json.choices[0].message.content, "1, 2, 3, 4")
+  assert.equal(json.choices[0].finish_reason, "stop")
+})
+
+test("a streamed snapshot becomes the suffix it added, and its tail is not repeated", async () => {
+  const cred = await makeCred()
+  // A tool is what makes the tool-name pass run; its name is not cut here.
+  const tools = [toolOf("read")]
+  const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: async () => sseResponse(snapshotStream("1, ", "1, 2, 3, ", "1, 2, 3, 4", "1, 2, 3, 4")) })
+  const loaded = await plugin.auth.loader(async () => makeAuth(cred))
+  const res = await loaded.fetch(CHAT_URL, chatInit({ model: "GLM-5.2", messages: [{ role: "user", content: "count" }], tools, stream: true }))
+  assert.equal(res.status, 200)
+  // Each chunk carries only what it added: no prefix is sent twice. The
+  // closing repeats add an empty delta and no text at all.
+  assert.deepEqual(deltasOf(await readStream(res)), ["1, ", "2, 3, ", "4", ""])
+})
+
+test("a snapshot is reshaped even when no tool name was cut", async () => {
+  const cred = await makeCred()
+  // No tools at all: the tool-name pass finds nothing to restore, and the
+  // snapshot rewrite must still happen or the agent reads the raw shape.
+  const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: async () => sseResponse(snapshotStream("", "1, ", "1, 2, 3, ")) })
+  const loaded = await plugin.auth.loader(async () => makeAuth(cred))
+  const res = await loaded.fetch(CHAT_URL, chatInit({ model: "GLM-5.2", messages: [], stream: true }))
+  assert.equal(res.status, 200)
+  assert.deepEqual(deltasOf(await readStream(res)), ["", "1, ", "2, 3, "])
+})
+
+test("no snapshot text survives the rewrite, repeated and empty frames included", async () => {
+  const cred = await makeCred()
+  // The gateway opens with an empty snapshot and repeats the whole answer as it
+  // closes. Were the cumulative `text` left on those events, a reader of both
+  // shapes would count the answer twice: every event that carried a snapshot
+  // must come back as a `delta` only, empty where the snapshot added nothing.
+  // (The closing `finish_reason` event carries no snapshot and passes as it is.)
+  const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: async () => sseResponse(snapshotStream("", "1, 2, 3, ", "1, 2, 3, 4", "1, 2, 3, 4")) })
+  const loaded = await plugin.auth.loader(async () => makeAuth(cred))
+  const res = await loaded.fetch(CHAT_URL, chatInit({ model: "GLM-5.2", messages: [], stream: true }))
+  const text = await readStream(res)
+  const choices = text
+    .split("\n")
+    .filter((l) => l.startsWith("data:") && !l.includes("[DONE]"))
+    .map((l) => JSON.parse(l.slice(5).trim()).choices?.[0])
+    .filter(Boolean)
+  assert.equal(choices.length, 5, "every choice event is still there")
+  assert.equal(choices.every((c) => c.text === undefined), true, "no cumulative text left behind")
+  // The four snapshots (empty, three, four, repeated four) all became deltas.
+  assert.equal(choices.filter((c) => c.delta !== undefined).length, 4, "each snapshot is a delta event now")
+  assert.deepEqual(deltasOf(text), ["", "1, 2, 3, ", "4", ""])
+})
+
+test("a snapshot riding with other delta fields keeps them, tool calls included", async () => {
+  const cred = await makeCred()
+  // A real frame carries the call and the answer so far together, and the
+  // following snapshot carries only `text`. Rewriting may not drop the call.
+  const call = { index: 0, id: "call_1", type: "function", function: { name: "read", arguments: '{"pa' } }
+  const stream = sse(
+    { id: "c1", choices: [{ index: 0, text: "ab", delta: { tool_calls: [call] } }] },
+    { id: "c1", choices: [{ index: 0, text: "ab" }] },
+    { id: "c1", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+    "[DONE]",
+  )
+  const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: async () => sseResponse(stream) })
+  const loaded = await plugin.auth.loader(async () => makeAuth(cred))
+  const res = await loaded.fetch(CHAT_URL, chatInit({ model: "GLM-5.2", messages: [], stream: true }))
+  const frames = (await readStream(res))
+    .split("\n")
+    .filter((l) => l.startsWith("data:") && !l.includes("[DONE]"))
+    .map((l) => JSON.parse(l.slice(5).trim()).choices?.[0])
+    .filter(Boolean)
+  const withCall = frames.find((c) => c.delta?.tool_calls)
+  assert.equal(withCall.text, undefined, "the snapshot field still goes")
+  assert.equal(withCall.delta.content, "ab", "and its text is the content")
+  assert.deepEqual(withCall.delta.tool_calls, [call], "the call rides along")
+  // The same frame folded: the call and the answer both survive.
+  const folded = await (await loaded.fetch(CHAT_URL, chatInit({ model: "GLM-5.2", messages: [], stream: false }))).json()
+  assert.equal(folded.choices[0].message.content, "ab")
+  assert.deepEqual(folded.choices[0].message.tool_calls, [{ id: "call_1", type: "function", function: { name: "read", arguments: '{"pa' } }])
+  assert.equal(folded.choices[0].finish_reason, "tool_calls")
+})
+
+test("a snapshot that is not an extension of the last one replaces the answer", async () => {
+  const cred = await makeCred()
+  const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: async () => sseResponse(snapshotStream("abc", "xyz")) })
+  const loaded = await plugin.auth.loader(async () => makeAuth(cred))
+  const json = await (await loaded.fetch(CHAT_URL, chatInit({ model: "GLM-5.2", messages: [{ role: "user", content: "hi" }], stream: false }))).json()
+  // Not "abcxyz": a rewrite that is no extension of what came before wins whole.
+  assert.equal(json.choices[0].message.content, "xyz")
+})
+
+test("the old delta shape still folds and still streams untouched", async () => {
+  const cred = await makeCred()
+  const deltaStream = sse(
+    { id: "c1", choices: [{ index: 0, delta: { content: "你" } }] },
+    { id: "c1", choices: [{ index: 0, delta: { content: "好" } }] },
+    { id: "c1", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+    "[DONE]",
+  )
+  const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: async () => sseResponse(deltaStream) })
+  const loaded = await plugin.auth.loader(async () => makeAuth(cred))
+  const folded = await (await loaded.fetch(CHAT_URL, chatInit({ model: "GLM-5.2", messages: [], stream: false }))).json()
+  assert.equal(folded.choices[0].message.content, "你好")
+  const res = await loaded.fetch(CHAT_URL, chatInit({ model: "GLM-5.2", messages: [], stream: true }))
+  // Byte for byte: nothing tagged a delta, so nothing is rewritten.
+  assert.equal(await readStream(res), deltaStream)
+})
+
+test("an empty first snapshot keeps the reader waiting, and a later one is the answer", async () => {
+  const cred = await makeCred()
+  // The stream opens with an empty snapshot, before the answer's characters:
+  // that frame is no answer yet, so the reader keeps waiting rather than
+  // turning the response into an error. The next snapshot is the answer.
+  assert.equal(x.eventHasContent({ choices: [{ text: "" }] }), false)
+  assert.equal(x.eventHasContent({ choices: [{ text: "hi" }] }), true)
+  const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: async () => sseResponse(snapshotStream("", "hi")) })
+  const loaded = await plugin.auth.loader(async () => makeAuth(cred))
+  const res = await loaded.fetch(CHAT_URL, chatInit({ model: "GLM-5.2", messages: [], stream: false }))
+  assert.equal(res.status, 200)
+  assert.equal((await res.json()).choices[0].message.content, "hi")
+})
+
 // ---- tool names over CodeArts' 64 characters (#432) -------------------------
 
 // The reporter's tool, word for word: ZCode's android emulator MCP, 71 long.
@@ -1454,6 +1652,121 @@ test("other upstream errors pass through untouched", async () => {
   assert.equal(res.status, 400)
   assert.equal(await res.text(), body)
   assert.equal(calls, 1)
+})
+
+// ---- the generic /api/v1 parameter refusal (measured 2026-11-14) -----------
+//
+// On one account, /api/v1 answers a chat parameter it won't take with a single
+// generic refusal whose code is written in the error's own words — and on the
+// 200-SSE path in no field at all:
+//
+//   A) HTTP 400  {"error":{"message":"码道 CodeArts: The request param is
+//      invalid, Please check it (InferHub.001001005.400)","type":
+//      "upstream_error","code":"InferHub.001001005.400"}}
+//   B) HTTP 200  data:{"error":{"message":"码道 CodeArts: The request param is
+//      invalid, Please check it (InferHub.001001005.400)","type":"api_error"}}
+//
+// The request is not at fault — another account or model takes it — so both
+// leave for magpie as a 502 to fail over on, while a 400 of another shape with
+// the same code (`RANGE_VALIDATOR`) keeps its 400 and its body.
+const GENERIC_400_CODE = "InferHub.001001005.400"
+const GENERIC_400_MESSAGE = "码道 CodeArts: The request param is invalid, Please check it (InferHub.001001005.400)"
+const generic400Body = JSON.stringify({ error: { message: GENERIC_400_MESSAGE, type: "upstream_error", code: GENERIC_400_CODE } })
+const generic200Event = { error: { message: GENERIC_400_MESSAGE, type: "api_error" } }
+
+test("errorCodeOf reads a code the gateway only wrote inside its error's own words", () => {
+  // B: an `error` object with a message and no `code` field, plain or over SSE.
+  assert.equal(x.errorCodeOf(JSON.stringify(generic200Event)), GENERIC_400_CODE)
+  assert.equal(x.errorCodeOf(`data:${JSON.stringify(generic200Event)}`), GENERIC_400_CODE)
+  // the legacy `error_msg` field is an error's context too
+  assert.equal(x.errorCodeOf('{"error_msg":"码道 CodeArts: refused (TM.00001041)"}'), "TM.00001041")
+  assert.equal(x.errorCodeOf('{"error_msg":"verify ak sk signature fail (APIG.0602)"}'), "APIG.0602")
+  // a `code` field still wins wherever the gateway wrote one
+  assert.equal(x.errorCodeOf('{"error":{"message":"boom (TM.00001041)","code":"InferHub.5000.500"}}'), "InferHub.5000.500")
+  assert.equal(x.errorCodeOf(generic400Body), GENERIC_400_CODE)
+
+  // an answer's own words are never an error's, however they are shaped
+  assert.equal(x.errorCodeOf(JSON.stringify({ choices: [{ message: { role: "assistant", content: "the log says (InferHub.001001005.400)" } }] })), "")
+  assert.equal(x.errorCodeOf("The request param is invalid, Please check it (InferHub.001001005.400)"), "")
+  assert.equal(x.errorCodeOf('{"error":{"message":"see the docs (v1.2) for the range"}}'), "")
+  assert.equal(x.errorCodeOf('{"error":{"message":"RANGE_VALIDATOR"}}'), "")
+  assert.equal(x.errorCodeOf('{"error":{"message":"released (2026-11-13)"}}'), "")
+})
+
+test("classifyHead tells an error event with no code field from an answer", () => {
+  const role = `data: ${JSON.stringify({ choices: [{ delta: { role: "assistant" } }] })}\n\n`
+  const refusal = `data:${JSON.stringify(generic200Event)}\n\n`
+  assert.equal(x.classifyHead(refusal, false), GENERIC_400_CODE)
+  // the empty role delta that comes first decides nothing
+  assert.equal(x.classifyHead(role + refusal, false), GENERIC_400_CODE)
+  // …while the role/content events of a real answer still do
+  assert.equal(x.classifyHead(role, false), undefined)
+  assert.equal(x.classifyHead(role + okStream, false), "answer")
+})
+
+test("embeddedErrorStatus fails over on the generic refusal only when its words are there", () => {
+  assert.equal(x.embeddedErrorStatus(GENERIC_400_CODE, GENERIC_400_MESSAGE), 502)
+  assert.equal(x.embeddedErrorStatus(GENERIC_400_CODE, generic400Body), 502)
+  // the old signature, and the same code with no words: the 400 it always was
+  assert.equal(x.embeddedErrorStatus(GENERIC_400_CODE), 400)
+  assert.equal(x.embeddedErrorStatus(GENERIC_400_CODE, ""), 400)
+  assert.equal(x.embeddedErrorStatus(GENERIC_400_CODE, "RANGE_VALIDATOR"), 400)
+  // and the 400s of another shape keep theirs with their words too
+  assert.equal(x.embeddedErrorStatus("InferHub.001001020.406"), 400)
+  assert.equal(x.embeddedErrorStatus("InferHub.001001020.406", "The request model is not multimodal"), 400)
+})
+
+test("the generic parameter 400 goes to magpie as a 502, and is not asked again here", async () => {
+  const cred = await makeCred()
+  let calls = 0
+  const plugin = await CodeArtsAuthPlugin({ client: {} }, {
+    fetch: async () => {
+      calls += 1
+      return new Response(generic400Body, { status: 400, headers: { "content-type": "application/json" } })
+    },
+    ...fastRetry,
+  })
+  const loaded = await plugin.auth.loader(async () => makeAuth(cred))
+  const res = await loaded.fetch(CHAT_URL, chatInit({ model: "GLM-5.2", messages: [{ role: "user", content: "你好" }] }))
+  assert.equal(res.status, 502)
+  assert.equal(res.headers.get("X-Magpie-Sign-In"), null)
+  const body = await res.json()
+  assert.equal(body.error.code, GENERIC_400_CODE)
+  assert.match(body.error.message, /The request param is invalid, Please check it/)
+  assert.equal(body.error.message, GENERIC_400_MESSAGE, "the code is in its own words: not written a second time")
+  assert.equal(calls, 1, "the same account is not asked again")
+})
+
+test("the generic refusal inside a 200 is a 502, streamed or folded, never an empty answer", async () => {
+  const cred = await makeCred()
+  let calls = 0
+  const plugin = await CodeArtsAuthPlugin({ client: {} }, {
+    fetch: async () => {
+      calls += 1
+      return sseResponse(sse({ choices: [{ delta: { role: "assistant" } }] }, generic200Event))
+    },
+  })
+  const loaded = await plugin.auth.loader(async () => makeAuth(cred))
+  for (const stream of [true, false]) {
+    const res = await loaded.fetch(CHAT_URL, chatInit({ model: "GLM-5.2", messages: [{ role: "user", content: "你好" }], stream }))
+    assert.equal(res.status, 502, `stream ${stream}`)
+    assert.equal(res.headers.get("X-Magpie-Sign-In"), null, `stream ${stream}`)
+    const body = await res.json()
+    assert.equal(body.error.code, GENERIC_400_CODE, `stream ${stream}`)
+    assert.equal(body.error.message, GENERIC_400_MESSAGE, `stream ${stream}`)
+    assert.match(body.error.message, /The request param is invalid, Please check it/, `stream ${stream}`)
+  }
+  assert.equal(calls, 2, "one upstream call per request")
+})
+
+test("a code the gateway did not write in its own words is added to them, once", async () => {
+  const cred = await makeCred()
+  const quota = sse({ error_code: "InferHub.4291.200", error_msg: "insufficient quota" })
+  const plugin = await CodeArtsAuthPlugin({ client: {} }, { fetch: async () => sseResponse(quota) })
+  const loaded = await plugin.auth.loader(async () => makeAuth(cred))
+  const res = await loaded.fetch(CHAT_URL, chatInit({ model: "GLM-5.2", messages: [] }))
+  assert.equal(res.status, 429)
+  assert.equal((await res.json()).error.message, "insufficient quota (InferHub.4291.200)")
 })
 
 const stsBody = (ak, refresh) => JSON.stringify({
