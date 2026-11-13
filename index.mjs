@@ -54,6 +54,7 @@ import { chooseLoginMethod, createBrowserLogin, createBuiltinLogin, LOGIN_KIND_B
 import { probeClientLogin } from "./src/officeace-client.mjs"
 import { initAutoMaintenance } from "./src/auto-maintenance.mjs"
 import { openConsoleWindow, waitForLoginAndSave, loadSavedCookies, primeSession, closeWindow, CONSOLE_URL } from "./src/console-browser.mjs"
+import { launchIsolatedLogin } from "./src/isolated-login.mjs"
 
 const PROVIDER = "officeace"
 const PROVIDER_NAME = "果办 OfficeAce"
@@ -304,6 +305,7 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
     browser: createBrowserLogin(typeof options?.beginLogin === "function" ? options.beginLogin : beginLogin),
     builtin: options?.builtinLogin ?? null,
   })
+  const openIsolated = typeof options?.isolatedLogin === "function" ? options.isolatedLogin : launchIsolatedLogin
 
   const log = (msg, level = "info") => {
     try {
@@ -315,6 +317,58 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
 
   // 卡片标题与文案不在这里做 —— 那是 registry 条目的职责（见 registry-entry.json）。
   // 插件不写 magpie 自己的缓存目录：那份文件属于 magpie，插件只读不写。
+
+  // 两个入口共用同一个真正的 OAuth 流程；只有主入口会先试已保存凭据。
+  // 添加账号必须开一次性隔离 profile，否则日常浏览器里的旧华为云会话会静默换回旧账号。
+  const startOAuthAuthorization = async ({ isolated = false } = {}) => {
+    const started = await loginMethod.start()
+    let isolatedWindow = null
+    let isolatedError = ""
+    if (isolated) {
+      try {
+        isolatedWindow = await openIsolated({ url: started.url })
+        if (!isolatedWindow?.ok) isolatedError = String(isolatedWindow?.error || "隔离登录窗口启动失败").slice(0, 500)
+      } catch (e) {
+        isolatedWindow = null
+        isolatedError = String(e?.message ?? e).slice(0, 500)
+      }
+      if (isolatedError) {
+        // 没窗口可登录：取消后台轮询，并接住迟到拒绝，避免未处理 Promise。
+        try { started.close?.() } catch {}
+        void started.result?.catch?.(() => {})
+      }
+    }
+    return {
+      url: started.url,
+      ...(isolated ? { opened: true } : {}),
+      instructions: isolated
+        ? "已打开独立登录窗口（不带你日常浏览器的 Cookie 或旧账号会话）。请在里面完成华为云登录，完成后窗口会自动关闭。"
+        : MAAS_OAUTH_INSTRUCTIONS,
+      method: "auto",
+      async callback() {
+        if (isolatedError) return { type: "failed", error: isolatedError }
+        try {
+          const cred = await started.result
+          const identified = { ...cred, ...(await phoneField(cred)) }
+          if (!identified.modelAppKey) noteMaasPending(identified)
+          void ensureTrialPackage(identified, trialDeps).catch(() => {})
+          return {
+            type: "success",
+            refresh: identified.refreshToken ?? "",
+            access: JSON.stringify(identified),
+            expires: Date.parse(identified.expiresAt ?? "") || Date.now() + 3600_000,
+            ...accountIdentityOf(identified),
+          }
+        } catch (e) {
+          return { type: "failed", error: String(e?.message ?? e).slice(0, 500) }
+        } finally {
+          if (isolatedWindow?.ok) {
+            try { await isolatedWindow.close() } catch {}
+          }
+        }
+      },
+    }
+  }
 
   return {
     // ═══ ① 声明 provider ═════════════════════════════════════════════
@@ -338,7 +392,7 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
 
       // ═══ ② 登录 ═══════════════════════════════════════════════════
       /**
-       * ⚠ 只有一个入口，进去之后自己分流（用户不用选）：
+       * ⚠ 主入口进去之后自己分流：
        *
        *   ① 手里有已保存的登录态 → 先用它打一次 MaaS 侧接口（**短超时**，默认 1.2s）
        *      ・granted     → 已开通：打开控制台给用户用，本窗口直接完成
@@ -347,6 +401,7 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
        *   ② dead（401/403）或根本没有登录态 → 走华为云 OAuth 登录
        *
        * ⚠ authorize() 必须立刻返回：探测用的是短超时，不是常规的 30s。
+       *   第二入口「添加其他华为云账号」直接走②，不做已有凭据复用探测。
        *   真正的等待都在 callback() 里。
        */
       methods: [
@@ -523,36 +578,13 @@ export const OfficeAceAuthPlugin = async ({ client } = {}, options = {}) => {
             }
 
             // ② 凭据不能用（或没有）：真正的华为云登录
-            const started = await loginMethod.start()
-            return {
-              url: started.url,
-              instructions: MAAS_OAUTH_INSTRUCTIONS,
-              method: "auto",
-
-              async callback() {
-                try {
-                  const cred = await started.result
-                  // 卡片名用手机号，不用 domain id（见 src/phone.mjs 顶部）
-                  const identified = { ...cred, ...(await phoneField(cred)) }
-                  if (!identified.modelAppKey) noteMaasPending(identified)
-                  // 登录后：缺个人体验版就后台补领（不阻塞 callback）
-                  void ensureTrialPackage(identified, trialDeps).catch(() => {})
-                  return {
-                    type: "success",
-                    // magpie 的 refreshLead 机制读这个
-                    refresh: identified.refreshToken ?? "",
-                    // 完整凭据（JSON 字符串，与前版同形状 + 一个可选 user_phone）
-                    access: JSON.stringify(identified),
-                    expires: Date.parse(identified.expiresAt ?? "") || Date.now() + 3600_000,
-                    // 卡片显示名（手机号）/ 身份（domain id）
-                    ...accountIdentityOf(identified),
-                  }
-                } catch (e) {
-                  return { type: "failed", error: String(e?.message ?? e).slice(0, 500) }
-                }
-              },
-            }
+            return startOAuthAuthorization()
           },
+        },
+        {
+          type: "oauth",
+          label: "添加其他华为云账号",
+          authorize: () => startOAuthAuthorization({ isolated: true }),
         },
       ],
 

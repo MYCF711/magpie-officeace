@@ -179,8 +179,8 @@ async function fetchModelInfo(cred) {
 /**
  * 启动登录。
  *
- * @returns {Promise<{url: string, result: Promise<object>}>}
- *   url 立刻可用（magpie 会打开它）；result 兑现完整凭据。
+ * @returns {Promise<{url: string, result: Promise<object>, close: () => void}>}
+ *   url 立刻可用（magpie 会打开它）；result 兑现完整凭据；close 取消后台轮询。
  */
 export async function beginLogin() {
   const state = await registerState()
@@ -204,11 +204,14 @@ export async function beginLogin() {
   )}`
 
   // ⚠ 后台推进：先返回 url，让调用方立刻拿到（否则与 magpie 死锁）
+  let closed = false
   const result = (async () => {
     const deadline = Date.now() + LOGIN_TIMEOUT_MS
-    while (Date.now() < deadline) {
+    while (!closed && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
+      if (closed) break
       const code = await pollCode(state)
+      if (closed) break
       if (!code) continue
 
       const exchanged = await exchangeToken(code, codeVerifier, privateJwk)
@@ -222,10 +225,10 @@ export async function beginLogin() {
       }
       return { ...exchanged, ...info, codeVerifier }
     }
-    throw new Error("OfficeAce 登录超时（10 分钟）")
+    throw new Error(closed ? "OfficeAce 登录已取消" : "OfficeAce 登录超时（10 分钟）")
   })()
 
-  return { url: authorizeUrl, result }
+  return { url: authorizeUrl, result, close: () => { closed = true } }
 }
 
 // ── 续期 ──────────────────────────────────────────────────────────

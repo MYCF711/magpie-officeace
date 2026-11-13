@@ -1,3 +1,34 @@
+## 0.3.0 — 2026-11-13
+
+**CodeArts 自动邀请 + 签到契约；OfficeAce 第二登录入口 + 一次性隔离窗口。**
+
+- **第二登录入口**：`auth.methods` 现在是两个入口 —— 主入口「华为云账号」保持原行为
+  （先复用 OfficeAce 客户端登录态 / 已保存凭据，都不行才走华为云 OAuth）；第二入口
+  「添加其他华为云账号」**跳过凭据复用探测**，直接走华为云 OAuth。
+- **一次性隔离窗口**：第二入口每次点击都用 `mkdtemp` 在系统临时目录建一份全新的 Chromium
+  `--user-data-dir`（`officeace-isolated-login-*`），不读、不复制、不删除日常浏览器的
+  profile / Cookie / LocalStorage，也不开 CDP 调试端口；返回 `opened: true`（插件自己开窗，
+  宿主不再用系统浏览器）；OAuth 完成 / 失败 / 取消都在 `callback` 的 `finally` 里关掉**本次**
+  进程并删除**本次**临时目录；启动失败如实返回失败，不回退日常浏览器，并 `close()` 取消授权码轮询。
+  实现见 `src/isolated-login.mjs`，回归见 `tests/isolated-login.test.mjs`（18 条，含 Linux 事件循环
+  必须 ref 等待定时器的独立 Node 进程回归，以及 Windows/POSIX 浏览器路径名兼容）、`tests/add-account.test.mjs`（3 条）与 `tests/login-cancel.test.mjs`。
+- **签到归属写清**：「每日自动签到」开关（magpie 设置 → 用量）与每账号行的「立即签到」按钮
+  由 **magpie 宿主**在插件实现 `auth.checkin` 时提供；插件**不写定时器**、**不新增重复开关**，
+  只实现 `auth.checkin` 的一次领取（临期先续期；今天已经领过也按最新契约返回 `claimed` + `credit:0`，不重复记账）。
+- **贡献保留**：Issue #31 的根因（日常浏览器会话让「加号」静默换回旧账号）与第二入口建议
+  来自 **@manjughosa**；基础修复与回归（两个入口的拆分、`tests/add-account.test.mjs`、
+  `tests/maas.test.mjs` 的两入口断言）来自保留 PR **#37** 的 commit **12dc8ea**；本次在其上
+  补齐一次性隔离窗口（`src/isolated-login.mjs` + `authorize({ isolated: true })` 接线）。
+- **CodeArts 邀请模式**：新增 `auth.options[].invite_mode`（默认关、`placement:"top"`）。关闭时使用
+  最新注册账号的邀请链接，没码则在 `ask()` 阶段通过官方 `INVITE_USER` 活动与
+  `POST /v1/ops/invite/generate`（`channel:"WEB"`）取码，失败回退上一个可用账号再到预留码；
+  开启时只使用 magpie「Make first」首选账号，失败只回预留。新账号 OAuth 成功后用
+  `confirm-by-code` 建立邀请关系；登录前已存在的账号重登跳过确认，失败不影响登录。协议与接线回归见
+  `tests/codearts-invite.test.mjs`（36 条）与 `tests/codearts-invite-wire.test.mjs`（5 条）。
+- **边界**：邀请能力仅属于 CodeArts；OfficeAce 域没有对应协议，未伪造同名选项或端点。
+- **贡献历史随本 PR 一起合并**：PR #37 的原始提交 `12dc8ea` 直接作为本分支基座，后续功能与
+  隔离修复追加在其上，以 merge commit 合入，保留作者与提交历史，而不是只复制代码文本。
+
 ## 0.2.9 — 2026-11-10
 
 - **修复码道 CodeArts 聊天返回 `400 InferHub.APIG.0101.404`**：聊天基址从 `/api/v2` 切换到已发布的 `/api/v1`。同一账号、同一模型、同一签名逻辑的隔离 A/B 中，v2 返回上述 400，v1 返回 200 并回显 `deepseek-v4.1-flash`；新增固定端点的防回归测试。

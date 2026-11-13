@@ -30,11 +30,11 @@ OfficeAce 的 `/v2` 端点要 `Authorization: Basic base64(appKey:appSecret)`，
 | # | 钩子 | 干什么 |
 |---|---|---|
 | ① | `config(cfg)` | 声明 provider + 静态模型表（未登录时也必须有内容，否则 magpie 显示 `0 models`）|
-| ② | `auth.methods[].authorize()` | 华为云 OAuth（PKCE + DPoP）|
+| ② | `auth.methods[].authorize()` | 华为云 OAuth（PKCE + DPoP）；**两个入口**共用同一条流程 —— 主入口先复用凭据，第二入口「添加其他华为云账号」开一次性隔离窗口 |
 | ③ | `auth.refresh(auth, provider)` | STS 续期，带并发去重闸 |
 | ④ | `auth.loader(getAuth, provider)` | 请求接管（Bearer → Basic）|
 | ⑤ | `auth.usage(getAuth, provider)` | 订阅积分分桶 |
-| ⑥ | `auth.checkin(getAuth, provider)` | 每日签到 |
+| ⑥ | `auth.checkin(getAuth, provider)` | 每日签到（**开关与按钮由宿主提供**；插件只做一次领取，不写定时器）|
 | ⑦ | `provider.models(provider, {auth})` | 每账号目录（失败回退静态表）|
 | ⑧ | `"chat.headers"(input, output)` | 会话保持 |
 | ⑨ | `accountId` / `uid` / `icon` / `maxConcurrency` | 卡片显示名（手机号，IAM 读一次，打码 `138****8000`）/ 身份（华为云 domain id）/ 图标 / 并发 3。取不到手机号才回落到 domain id |
@@ -55,6 +55,31 @@ OfficeAce 的 `/v2` 端点要 `Authorization: Basic base64(appKey:appSecret)`，
 
 ⚠ `authorize()` **必须立刻返回**，不能在里面等用户完成登录 —— 真正等的是 `callback()`。
 死等会让双方互等（magpie 要拿到 url 才会去开浏览器）。
+
+### 两个登录入口（`auth.methods`）
+
+`auth.methods` 是两条，但**共用同一条 OAuth 流程** `startOAuthAuthorization`：
+
+| 入口 | `authorize` | 复用凭据？ | 窗口 |
+|---|---|---|---|
+| `华为云账号`（主入口） | `probeClientLogin` → 已保存凭据 → MaaS 探测；都不行才 `startOAuthAuthorization()` | 是 | 宿主系统浏览器 / 受控控制台窗口 |
+| `添加其他华为云账号`（第二入口） | `() => startOAuthAuthorization({ isolated: true })`，**直接**走 OAuth | 否（跳过 `probeClientLogin` / `probeMaasAccess`） | 插件自己开的一次性隔离 Chromium |
+
+第二入口的隔离实现是 `src/isolated-login.mjs` 的 `launchIsolatedLogin`：
+
+- `mkdtemp(join(os.tmpdir(), "officeace-isolated-login-"))` —— 每次点击一份全新 `--user-data-dir`；
+- 参数只有 `--user-data-dir=…` + 四个干净启动开关（`--no-first-run` / `--no-default-browser-check` / `--disable-extensions` / `--disable-background-networking`），**不开** `--remote-debugging-port`、**不指定** `--profile-directory`；
+- 只等 `spawn`（毫秒级），**不等用户登录** —— 等用户是 `callback`；
+- 返回 `{url, opened: true, method: "auto", instructions, callback}`：`opened: true` 告诉 magpie「窗口已经由插件打开」，不要再开系统浏览器；
+- `callback` 的 `finally` 里 `await close()`：`SIGTERM` → 有界等待 3s → 补 `SIGKILL`，然后删本次临时目录；`close` 幂等，只杀自己 spawn 的 child，绝不按进程名 / 端口批量清理；
+- 启动失败（没浏览器 / spawn 抛错 / ENOENT / 5s 超时 / 取消）一律返回 `ok:false` 的**同形句柄**，`callback` 直接 `{type:"failed"}`，**不回退**日常浏览器；同时 `beginLogin.close()` 取消授权码轮询，不留 10 分钟后台循环；
+- `isDailyProfilePath()` 兜底：临时目录如果指向日常 Chrome / Edge / Brave / Vivaldi / 360 / QQ 的 `User Data`、`~/.config/google-chrome`、macOS `Application Support/...`，或 officeace 自己的持久控制台 profile（`~/.cache/magpie/officeace-huawei-<account>/profile`，可用 `MAGPIE_CACHE_DIR` 覆盖），**拒绝启动且绝不删除**那个目录；
+- 启动/关闭所 await 的定时器必须 **ref**：Linux 在没有其它活动句柄时，`unref` 会让事件循环提前结束（CI 曾因此 `cancelledByParent`）；settle/close 一定清掉，最终 `_internal.activeTimers()` 归零，不留常驻定时器。
+
+与 `src/console-browser.mjs` 的分工（别混）：console-browser 是登录**之后**打开 MaaS 控制台，用**持久** profile + `--remote-debugging-port` + CDP 抓 Cookie；本模块是登录**之前**打开 OAuth 授权页，用**一次性** profile、不开调试端口。两者唯一共用 `findBrowser`。
+
+测试：`tests/isolated-login.test.mjs`（18 条，假 spawn / 假 fs / 假 browser + 独立 Node 空事件循环回归）、`tests/add-account.test.mjs`
+（3 条：第二入口跳过复用、隔离失败并取消轮询、OAuth 结束后关闭窗口）与 `tests/login-cancel.test.mjs`。
 
 ### 凭据存在哪
 
@@ -226,9 +251,48 @@ Basic 凭据回 `400 ModelArts.81002`。
 
 `POST {SUB}/v1/subscription/bonus/claim` → magpie 六种 outcome 之一。
 
-⚠ **重复领取是幂等的** —— 服务端 2xx 但 `bonus_skus` 为空时是 `done`（今天已领完），
-**不是 `failed`**。只看状态码会误报成「签到失败」。
-2xx 但响应无法解析也归 `done`（领取本身可能已成功，明天再来）。
+⚠ **重复领取是幂等的** —— 服务端 2xx 但 `bonus_skus` 为空表示今天已领取，按 scaffold 0.3.13
+契约返回 `claimed`（宿主据此盖当天时间戳），**不是 `failed`**，也不重复记账；重复调用 `credit:0`，
+表示本次没有新领取。2xx 但响应无法解析仍归 `done`（无法确认今天的入账，不能冒充 `claimed`）。
+
+### 签到开关与按钮由宿主提供
+
+插件**只实现 `auth.checkin`**，其余全部是 magpie 的：
+
+- **「每日自动签到」开关**：magpie 的**设置 → 用量**；插件不声明自己的选项，也不新增重复开关。
+- **「立即签到」按钮**：宿主在**每个账号**那一行画（`auth.checkin` 存在即出现）；插件不自己画按钮 / 不加页面入口。
+- **调度**：宿主按**北京时间**每账号每天调一次，当天失败后还会再调；记账写宿主的
+  `~/.config/magpie/plugin-checkin.json`（插件不写这个文件）。
+- **插件不写定时器**：判据是 `grep -n "setInterval\|cron" index.mjs src/*.mjs` 没有调度器
+  （`src` 里的 `setTimeout` 全是单次请求超时）。自己写定时器会：重启即失效、和宿主撞车重复签、
+  用户关掉开关后仍在跑。
+- **插件只做一次领取**：临期先续期（续不动就用旧凭据试一次），再 `POST /v1/subscription/bonus/claim`；
+  返回 `claimed` / `done` / `failed` 等，失败也不影响额度与对话。
+
+### CodeArts 自动邀请
+
+协议证据来自官方 `CodeArtsWorkWeb/126.10.10.20261110214624` 打包产物，不是从其它供应商猜的：
+
+1. `GET /v1/ops/delivery?channel=IDE` 里取 `type === "INVITE_USER" / "invite_user"` 的活动；
+2. `POST /v1/ops/invite/generate`，body 是 `{campaignId, channel:"WEB"}`，响应读
+   `data.inviteUrl`（从 `?invitecode=` 提码）或 `data.inviteCode`；
+3. 新账号 OAuth 成功后，`POST /v1/ops/invite/confirm-by-code?inviteCode=<code>`（无 body）确认邀请关系。
+   `authorize()` 登录前记下 `knownUids`；身份已在其中的旧账号重登直接跳过第 3 步，只有新账号才确认。
+   拿不到身份时仍尝试一次并由服务端判定，失败只记 warning，不让 OAuth 失败。
+
+`auth.options[].invite_mode` 是 provider 级布尔开关，`default:false`、`placement:"top"`，每次经
+`_ctx.magpie.option("codearts", "invite_mode")` 现读，不在工厂构造时缓存。`prompts` 与 `ask()` 同时保留；
+联网取码只在 `ask()`，`authorize()` 只做纯本地源解析。
+
+- **off**：最新注册账号有码直接用；没码则用该账号凭据生成，失败回退上一个有码账号，再回退预留码。
+- **on**：`logins.json` 的 `first:true` → 最小正 `order` → 第一行决定首选，`home` 映射到
+  `plugin-auth.json` 的 `uid || accountId`；首选没码/失败只回预留，`home` 映射失效（含账号已删）也直接回预留，绝不顺移换号。
+- `firstSeenAt` 只写一次；首次同步多个旧账号时按 `plugin-auth.json` 的加入顺序赋先后，避免同毫秒排序反转。
+- 每 uid 24 小时最多 generate 一次（失败也节流）；已删除账号不作源，账号文件读不到时不把全量账号误判删除。
+- 状态只写 `~/.cache/magpie/codearts-invite.json`（账号时间、邀请码、预留码、尝试时间），原子替换；
+  凭据仅在内存里传给 `snapRequest`，不落盘。`plugin-auth.json` / `logins.json` 只读。
+
+OfficeAce 的订阅面没有这套邀请路由，不能把 CodeArts 的端点或签名搬过去。
 
 ---
 
@@ -289,7 +353,7 @@ m quota
 计费清单      ✅ 9 条
 实际显示      ✅ 7 个
 积分分桶      ✅ plan 个人体验版，3 个窗口
-签到          ✅ claimed +100（重复调用返回 done —— 幂等判定正确）
+签到          ✅ claimed +100（重复调用返回 claimed +0 —— 今天已领取，不重复记账）
 倍率          ✅ 9 条，与界面显示同源
 凭据往返      ✅ toStored → credentialOf 一致
 ```
@@ -303,3 +367,5 @@ m quota
 - **不做协议转换**：上游是 OpenAI 协议，转一层只会多一个出错的地方。
 - **不猜试用桶的到期时间**：`.trial` 不带到期字段就不显示到期。
 - **不列选不了的模型**：见上「26 / 9 / 7」。
+- **不做 OfficeAce 邀请**：OfficeAce 订阅面没有邀请路由，不伪造开关或端点。CodeArts 的
+  `INVITE_USER` / generate / confirm-by-code 已实现并有离线协议与接线测试，见上「CodeArts 自动邀请」。

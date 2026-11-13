@@ -188,11 +188,13 @@ test("说明文案：控制台那条如实写「要登录就用同一账号」�
   assert.ok(_internal.MAAS_ALREADY_INSTRUCTIONS.includes("已经开通"))
 })
 
-test("只有一个登录入口（用户不用选）", async () => {
+test("主入口复用凭据，第二入口用于添加其他账号", async () => {
   const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile(), fetch: noModelInfo })
-  assert.equal(plugin.auth.methods.length, 1)
+  assert.equal(plugin.auth.methods.length, 2)
   assert.equal(plugin.auth.methods[0].type, "oauth")
   assert.equal(plugin.auth.methods[0].label, "华为云账号")
+  assert.equal(plugin.auth.methods[1].type, "oauth")
+  assert.equal(plugin.auth.methods[1].label, "添加其他华为云账号")
 })
 
 test("单入口 · 凭据已能开通：直接完成，不轮询", async () => {

@@ -382,8 +382,10 @@ export async function claimTrialPackage(cred, opts = {}) {
  *
  * 返回 magpie 的六种 outcome 之一。
  *
- * ⚠ 重复领取是幂等的 —— 服务端 2xx 但 `bonus_skus` 为空时是 `done`（今天已领完），
- *   不是 `failed`。只看状态码会误报。
+ * ⚠ 重复领取是幂等的 —— 服务端 2xx 但 `bonus_skus` 为空时，**今天的领取已成立**，
+ *   必须报 `claimed`（不是 `failed`，也不是 `done`）。判据是「今天的领取是否已成立」，
+ *   不是「这一次是不是新按了一下」：宿主只把当天时间戳盖在 `claimed` 上，
+ *   报 `done` 会让那笔积分丢掉「今天的」归属（magpie-plugin-scaffold 0.3.13 · HOOKS 二之二）。
  */
 export async function checkin(cred) {
   if (!cred?.access || !cred?.securityToken) {
@@ -417,7 +419,9 @@ export async function checkin(cred) {
   }))
   const credit = skus.reduce((sum, s) => sum + s.points, 0)
 
-  if (skus.length === 0) return { outcome: "done", message: "今日已无新增可领" }
+  // 2xx 且没有新增可领 = 重复领取（幂等），**今天的领取已成立** ⇒ claimed。
+  // credit:0 表示本次没有新领取；streak 没有真实数字就不给（scaffold 0.3.13）。
+  if (skus.length === 0) return { outcome: "claimed", credit: 0, message: "今日已签到" }
 
   return {
     outcome: "claimed",

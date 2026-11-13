@@ -51,8 +51,8 @@
       出处：internals 额度分桶
 
 □ 11. 签到幂等判据用对了
-      判据：2xx + bonus_skus 为空 = done（今天领完），不是失败
-      出处：internals 额度分桶
+      判据：2xx + bonus_skus 为空 = claimed + credit:0（今天已领取，本次无新增，不重复记账）；无法解析才保持 done
+      出处：internals 额度分桶 · scaffold 0.3.13
 
 □ 12. 没有写 magpie 的市场缓存
       判据：src 里搜不到 plugin-market.json
@@ -67,6 +67,15 @@
             官方是网页的是完整 Chrome UA，有 App / CLI 客户端的是那个客户端的 UA；
             loader 的 `fetch` 包装里 `"user-agent"` 在跳过名单内、由插件补官方值
       出处：模板坑表第 38 条 · scripts/check-ua.mjs
+
+□ 15. CodeArts 邀请源与确认时机没接错
+      判据：invite_mode 默认 false + placement:"top"；off 最新 / on Make first；
+            generate 用 WEB，confirm 只在新账号 OAuth 成功后；首选失败不串到其它账号
+      出处：tests/codearts-invite-wire.test.mjs
+
+□ 16. 添加其他账号不会被日常浏览器会话换回旧号
+      判据：第二入口跳过凭据复用，opened:true + 一次性 Chromium profile；结束只清理本次进程/目录
+      出处：Issue #31 / PR #37 · tests/add-account.test.mjs · tests/isolated-login.test.mjs
 ```
 
 ---
