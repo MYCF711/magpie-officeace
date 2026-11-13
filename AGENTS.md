@@ -65,6 +65,7 @@ curl -s "https://usemagpie.ai/api/latest?channel=stable" | grep -o '"version":"[
 | 15 | **上游偶发或固定回 403 `TM.00000001`（文案是「网络繁忙，请稍后重试」），重试和换账号都没用**；或者某个 provider 换到新网络 / 新账号后就不通 | 每个打上游的 `fetch` 都**显式**带 `User-Agent`，值是**该服务官方客户端**的 UA —— 绝不写 `<包名>/<版本号>`，也绝不让宿主的 `magpie/<version>` 透传（插件不设 UA 时它就这么上去）。官方是网页就用完整 Chrome UA；有 App / CLI 客户端就用那个客户端的 UA。判据：`node scripts/check-ua.mjs` 退出 0（模板坑表第 38 条） | README「3. User-Agent 常常是硬校验」· `scripts/check-ua.mjs` |
 | 16 | 已有健康账号时点添加仍换回旧账号 | 第二入口「添加其他华为云账号」不做复用探测，并且自己开一次性隔离 Chromium、返回 `opened: true`；只返回 `url` 会再次落到日常浏览器（Issue #31 / PR #37） | `index.mjs` · `src/isolated-login.mjs` |
 | 17 | 邀请开关不出现、拨了不生效或邀请挂到别的账号 | 仅 CodeArts 声明 `invite_mode`（`placement:"top"`、使用点实时读）；联网取码只在 `ask()`，off 最新 / on Make first（首选失败只回预留）；generate body 用 `channel:"WEB"`，新账号 OAuth 成功后才 `confirm-by-code` | `src/codearts/invite.mjs` · `tests/codearts-invite-wire.test.mjs` |
+| 18 | CodeArts 聊天稳定回 400 `InferHub.001001005.400`「The request param is invalid」，重新登录也没用；小请求/探针却 200 | **不是登录问题**：/api/v1 在生成前校验三族参数，任一违规都回这同一个泛化 400（约 0.3 s，还没开始生成）——① `max_tokens`/`max_completion_tokens` > **32000**（32001 起必拒，目录自报的 65536 是 v2 的值）② `seed` ∉ {0,1} ③ `stop` 是数组。判据：`MAX_OUTPUT_TOKENS === 32000` 且 `prepareChatBody` 会删掉违规 seed / 把单元素 stop 数组转字符串 | CHANGELOG 0.3.1 · `tests/codearts.test.mjs` |
 
 ---
 

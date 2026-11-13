@@ -1,3 +1,22 @@
+## 0.3.1 — 2026-11-13
+
+**修复码道 CodeArts 聊天稳定 400 `InferHub.001001005.400`（The request param is invalid）。**
+
+- **输出上限按 /api/v1 收紧到 32000**：`MAX_OUTPUT_TOKENS` 从 `65536`（/api/v2 的范围）改为 `32000`。
+  实测（2026-11-13，同一账号、同一 STS 签名，deepseek-v4.1-flash / kimi-k3.1-pro / glm-5.3 /
+  openpangu-2.0-pro 四个模型一致）：`max_tokens` 32000 回 200，32001–32768 回
+  `InferHub.001001005.400`（约 0.3 s，生成前校验）。模型目录 `GET /v1/model/builtin` 自报的
+  65536 不是聊天端的值，不能直接当 `max_tokens` 上报给宿主或下游客户端。
+- **额外两族参数同样会被 /api/v1 拒（同一个错误码）**，现在在签名前就地清洗：
+  `seed` 只放行 0 / 1（其它值 `42`、`"42"`、`42.0`、`-1`、`2048`… 都 400，实测 3/3），
+  `stop` 只收单个字符串（数组形态 `["\n"]`、`["x","y"]`、甚至 `[]` 都 400，实测 3/3）。
+  单元素数组按同义转成字符串；空数组 / 多元素数组无法表达则丢弃。注：`stream: false`
+  的折叠路径会把 `seed` 丢掉，所以非流式调用掩盖了 `seed` 这一族，`stop` 数组则仍然 400。
+- **`max_completion_tokens` 与 `max_tokens` 同样按 32000 夹**；两者同时在请求里时上游以
+  `max_tokens` 为准（`max_tokens` 缺席时才会校验 `max_completion_tokens`，实测 3/3）。
+- 回归：`tests/codearts.test.mjs` 新增「上限钉死 32000」「seed / stop 清洗」两条；钉住
+  `MAX_OUTPUT_TOKENS === 32000`，防止以后又改回 65536。
+
 ## 0.3.0 — 2026-11-13
 
 **CodeArts 自动邀请 + 签到契约；OfficeAce 第二登录入口 + 一次性隔离窗口。**

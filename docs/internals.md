@@ -224,6 +224,38 @@ Basic 凭据回 `400 ModelArts.81002`。
 - 响应是 snake_case（`model_name` / `cost_coefficient`），兼容 camelCase
 - `x1` 不标（全默认倍率没有信息量），只标非 1 的
 
+### 聊天参数：/api/v1 的生成前三族校验（2026-11-13 实测）
+
+`/api/v1/chat/completions` 在**开始生成之前**做参数校验，违规一律回同一个泛化错误
+（约 0.15–0.65 s，body 可以只有 ~130 B、无 tools、无 system）：
+
+```
+400 InferHub.001001005.400  The request param is invalid, Please check it
+```
+
+三族参数各自独立触发（同一账号、同一 STS 签名、逐项只叠加一个变量）：
+
+| 参数族 | 放行 | 违规 → 400 |
+|---|---|---|
+| `max_tokens` / `max_completion_tokens` | ≤ **32000** | 32001、32768、65536、131072 …（deepseek-v4.1-flash / kimi-k3.1-pro / glm-5.3 / openpangu-2.0-pro 四个模型同一条线） |
+| `seed` | `0` / `1` | `2`…`2048`、`-1`、`2^31-1`、`"42"`、`42.0`、`true` / `false`（29/29 次 400） |
+| `stop` | 单个字符串 | 数组（`["\n"]`、`["x"]`、`["x","y"]`、甚至 `[]`，11/11 次 400） |
+
+两条容易踩的补充：
+
+- **`max_completion_tokens` 只在 `max_tokens` 缺席时才被校验**：两者同时给时上游以
+  `max_tokens` 为准（`max_tokens=16` + `max_completion_tokens=65536` → 200；只有
+  `max_completion_tokens=65536` → 400）。插件的夹取对两个键都做。
+- **`stream: false` 的折叠路径会把 `seed` 丢掉**：同一 `seed=42` 非流式 3/3 次 200，
+  流式 3/3 次 400 —— 因此用非流式探针测不出 `seed` 这一族；`stop` 数组在非流式仍然 400。
+- **不要用单次 200 当作「参数合法」**：边界值偶发会走上一条慢速回退路径（14–39 s 后
+  200，SSE 不收尾）。判边界要用「32000 过 / 32001 拒」这样的成对复测。
+
+⇒ 代码侧对应：`MAX_OUTPUT_TOKENS = 32_000`（夹 `max_tokens` / `max_completion_tokens`），
+`prepareChatBody` 里再由 `sanitizeUnsupportedParams` 删掉违规 `seed`、把单元素 `stop`
+数组转字符串。模型目录 `GET /v1/model/builtin` 自报的 `max_tokens: 65536` 是 `/api/v2`
+的预算，**不能**直接当聊天端的 `max_tokens` 上报给宿主或下游客户端。
+
 ---
 
 ## 额度分桶

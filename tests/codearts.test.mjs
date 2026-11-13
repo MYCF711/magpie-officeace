@@ -233,6 +233,40 @@ test("prepareChatBody reshapes a chat into what the gateway accepts and meters",
   assert.equal(x.prepareChatBody(null), null)
 })
 
+test("MAX_OUTPUT_TOKENS pins the /api/v1 output range at 32000", () => {
+  // Measured against the live gateway on 2026-11-13 (deepseek-v4.1-flash,
+  // kimi-k3.1-pro, glm-5.3, openpangu-2.0-pro): 32000 answers 200, 32001..32768
+  // answer 400 `InferHub.001001005.400` in ~0.3 s. The model catalog's 65536 is
+  // the /api/v2 budget; a future edit that swings the clamp back turns this red.
+  assert.equal(x.MAX_OUTPUT_TOKENS, 32000)
+  const big = x.prepareChatBody({ model: "GLM-5.2", messages: [], max_tokens: 65536 })
+  assert.equal(big.body.max_tokens, 32000)
+  const completion = x.prepareChatBody({ model: "GLM-5.2", messages: [], max_completion_tokens: 131072 })
+  assert.equal(completion.body.max_completion_tokens, 32000)
+  const edge = x.prepareChatBody({ model: "GLM-5.2", messages: [], max_tokens: 32001 })
+  assert.equal(edge.body.max_tokens, 32000)
+})
+
+test("prepareChatBody drops the parameters /api/v1 refuses outright", () => {
+  // Measured 2026-11-13 on the same account: `seed` outside {0, 1} and `stop`
+  // as an array answer 400 `InferHub.001001005.400` (even `stop: []`), while
+  // `seed: 0/1` and `stop: "x"` answer 200.
+  const seed = x.prepareChatBody({ model: "GLM-5.2", messages: [], seed: 42 })
+  assert.equal("seed" in seed.body, false)
+  assert.equal(x.prepareChatBody({ model: "GLM-5.2", messages: [], seed: 0 }).body.seed, 0)
+  assert.equal(x.prepareChatBody({ model: "GLM-5.2", messages: [], seed: 1 }).body.seed, 1)
+  assert.equal(x.prepareChatBody({ model: "GLM-5.2", messages: [], seed: "1" }).body.seed, undefined)
+
+  const single = x.prepareChatBody({ model: "GLM-5.2", messages: [], stop: ["\n"] })
+  assert.equal(single.body.stop, "\n")
+  const multi = x.prepareChatBody({ model: "GLM-5.2", messages: [], stop: ["a", "b"] })
+  assert.equal("stop" in multi.body, false)
+  const empty = x.prepareChatBody({ model: "GLM-5.2", messages: [], stop: [] })
+  assert.equal("stop" in empty.body, false)
+  const str = x.prepareChatBody({ model: "GLM-5.2", messages: [], stop: "x" })
+  assert.equal(str.body.stop, "x")
+})
+
 // The free model's TPM limit, word for word as the gateway sent it in a 200.
 const tpmEvent = 'data:{"text":"[DONE]","error_code":"InferHub.ModelArts.81111.429","error_msg":"The model TPM limit has been significantly exceeded. Please reduce the request rate and retry later."}'
 

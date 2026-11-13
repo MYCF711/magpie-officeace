@@ -196,8 +196,18 @@ const SESSION_RETRY_BUDGET_MS = 150_000
 const PERMIT_MAX_HOLD_MS = 15 * 60 * 1000
 // How much of a 200 body to read while looking for an embedded error.
 const SSE_PEEK_LIMIT = 16 * 1024
-// The gateway rejects a larger output budget (RANGE_VALIDATOR, 0..65536).
-const MAX_OUTPUT_TOKENS = 65_536
+// The gateway rejects a larger output budget. On the /api/v1 chat route the
+// range validator refuses `max_tokens` above 32000 (measured 2026-11-11/13 on
+// deepseek-v4.1-flash, kimi-k3.1-pro, glm-5.3 and openpangu-2.0-pro: 32000
+// answers 200, 32001..32768 answer 400 `InferHub.001001005.400` in ~0.3 s,
+// before any generation). The `/v1/model/builtin` catalog advertises 65536,
+// but that is the /api/v2 budget, not the chat route's.
+const MAX_OUTPUT_TOKENS = 32_000
+// `/api/v1` rejects these outright with the same generic 400 (measured
+// 2026-11-13): `seed` outside {0, 1}, and `stop` as an array (even `[]`;
+// only a single string is accepted). Drop/convert them before signing, or the
+// caller's whole request dies on a validation error.
+const SEED_ALLOWED = new Set([0, 1])
 // Left to its default the gateway streams the reasoning inside `content`, so a
 // caller shows the thinking as the answer; asked for explicitly it goes to
 // `reasoning_content` and `content` is the reply only.
@@ -963,7 +973,9 @@ function isRegularModel(model, state) {
  * - the bare model id, without the host's `codearts/` prefix;
  * - thinking asked for explicitly (unless the caller said, or the plugin's
  *   `thinking: false` option), so `content` carries only the reply;
- * - the output budget inside the gateway's 65536;
+ * - the output budget inside the gateway's 65536 (v2) / 32000 (v1);
+ * - `seed` / `stop` in the shapes the gateway takes; the ones it refuses are
+ *   dropped so one stray parameter cannot fail the whole request;
  * - always `stream: true`. CodeArts meters only streamed answers — a
  *   non-streaming 200 returns tokens yet leaves the credits untouched — so a
  *   caller that asked for JSON gets the stream folded back (`fold`);
@@ -981,9 +993,32 @@ function prepareChatBody(parsed, { thinking = true } = {}) {
   for (const k of ["max_tokens", "max_completion_tokens"]) {
     if (typeof body[k] === "number" && body[k] > MAX_OUTPUT_TOKENS) body[k] = MAX_OUTPUT_TOKENS
   }
+  sanitizeUnsupportedParams(body)
   const fold = body.stream !== true
   body.stream = true
   return { body, fold, injected, names }
+}
+
+/**
+ * Take out the chat parameters `/api/v1` turns away with the generic
+ * `InferHub.001001005.400` — a validation error that would otherwise kill
+ * every request from a caller that sets them (measured 2026-11-13, same
+ * account, body only ~130 B: `seed=42` 3/3 400 and `stop: ["\n"]` 3/3 400,
+ * while `seed=0` and `stop: "x"` answer 200).
+ *
+ * - `seed` is taken only as 0 or 1; any other value is dropped (the request
+ *   then loses its determinism, which beats failing outright).
+ * - `stop` is taken as a single string. A one-item array carries the same
+ *   meaning, so it goes as that string; an empty or multi-item array cannot be
+ *   expressed and is dropped. (The non-streaming fold path already loses
+ *   `seed` server-side, so callers rarely rely on either.)
+ */
+function sanitizeUnsupportedParams(body) {
+  if (body.seed !== undefined && !SEED_ALLOWED.has(body.seed)) delete body.seed
+  if (Array.isArray(body.stop)) {
+    if (body.stop.length === 1 && typeof body.stop[0] === "string") body.stop = body.stop[0]
+    else delete body.stop
+  }
 }
 
 // ---- tool names over the gateway's limit (#432) -----------------------------
