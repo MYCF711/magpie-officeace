@@ -987,6 +987,10 @@ function prepareChatBody(parsed, { thinking = true } = {}) {
   if (!parsed || typeof parsed.model !== "string" || !Array.isArray(parsed.messages)) return null
   const body = { ...parsed, model: upstreamModelId(parsed.model) }
   const names = shortenToolNames(body)
+  // Before anything is signed: the gateway refuses the turn order itself, so
+  // a caller that talks in several user messages in a row never gets an answer.
+  const turns = mergeConsecutiveTurns(body)
+  if (turns) body.messages = turns
   // `injected`: ours to take back should a model refuse the parameter.
   const injected = thinking && body.thinking === undefined
   if (injected) body.thinking = ENABLE_THINKING
@@ -997,6 +1001,77 @@ function prepareChatBody(parsed, { thinking = true } = {}) {
   const fold = body.stream !== true
   body.stream = true
   return { body, fold, injected, names }
+}
+
+/**
+ * Join every run of consecutive same-role messages into one, so the gateway
+ * sees the turn shape it takes.
+ *
+ * `/api/v1` refuses a conversation that is not a strict user/assistant
+ * alternation: a second user message in a row answers the generic
+ * `InferHub.001001005.400` — the same words it uses for a bad parameter, which
+ * is why it reads as a parameter bug. Measured 2026-11-15 on one account and
+ * model, bodies around 120 B: `["hi","hello"]` 3/3 400, `["hi\n\nhello"]` 200,
+ * `user/assistant/user` 200, and `developer`+`user`+`user` 400 while the first
+ * two joined answer 200. An agent that re-injects its context every turn sends
+ * exactly that shape (a system-style message plus the turns), so this is the
+ * shape most callers arrive in.
+ *
+ * Nothing a caller said is dropped: the texts are joined (a blank line between
+ * them, or their content parts concatenated) and the turn they make is the one
+ * that would have been read anyway. A message with `tool_calls` is never
+ * joined — its replies answer it by call id, and separating them would break
+ * the pairing. Returns the new list, or null when every turn already alternates
+ * (so the caller keeps the body it was given).
+ */
+function mergeConsecutiveTurns(body) {
+  const messages = body.messages
+  if (!Array.isArray(messages) || messages.length < 2) return null
+  const merged = []
+  let touched = false
+  for (const message of messages) {
+    const last = merged[merged.length - 1]
+    if (joinableTurn(last, message)) {
+      // a fresh object: the caller's message list is never mutated
+      merged[merged.length - 1] = { ...last, content: joinContent(last.content, message.content) }
+      touched = true
+    } else {
+      merged.push(message)
+    }
+  }
+  return touched ? merged : null
+}
+
+/** Can these two adjacent messages be read as one turn? */
+function joinableTurn(a, b) {
+  if (!a || typeof a !== "object" || !b || typeof b !== "object") return false
+  if (a.role !== b.role) return false
+  // a tool reply is addressed by its own `tool_call_id`; it is never folded
+  if (a.role === "tool" || b.role === "tool") return false
+  if (hasCalls(a) || hasCalls(b)) return false
+  return joinableContent(a.content) && joinableContent(b.content)
+}
+
+function hasCalls(message) {
+  const calls = message.tool_calls ?? message.function_call
+  return Array.isArray(calls) ? calls.length > 0 : calls != null
+}
+
+function joinableContent(content) {
+  if (typeof content === "string") return true
+  return Array.isArray(content) && content.every((part) => part && typeof part === "object")
+}
+
+/** Two contents as one: text joined by a blank line, content parts concatenated. */
+function joinContent(a, b) {
+  if (typeof a === "string" && typeof b === "string") return `${a}\n\n${b}`
+  return [...contentParts(a), ...contentParts(b)]
+}
+
+function contentParts(content) {
+  if (Array.isArray(content)) return content
+  if (typeof content === "string") return [{ type: "text", text: content }]
+  return []
 }
 
 /**
@@ -3222,7 +3297,7 @@ export const _internal = {
   claimBenefit, ensureBenefitClaimed, parseAgentModel, fetchAgentModels,
   readGrants, recordGrant, readUnconfirmed, recordUnconfirmed, grantExpiry, grantBatches, soonestLapse, fetchCreditBatches,
   PACKAGE_CREDIT_PAGE_URL, OPS_CREDIT_OVERVIEW_URL, OPS_CREDIT_CAMPAIGN_URL,
-  toBytes, isBenefitModel, prepareChatBody, signedFetch, signedGet,
+  toBytes, isBenefitModel, prepareChatBody, mergeConsecutiveTurns, joinContent, signedFetch, signedGet,
   TOOL_NAME_LIMIT, cutToolName, shortenToolNames, restoreToolNames, restoreToolNamesInStream,
   parseSseEvents, errorCodeOf, errorMessageOf, isStaleCredential, isRateLimitCode, embeddedErrorStatus, isNotMultimodal, classifyHead,
   eventHasContent, snapshotToDeltaStream,

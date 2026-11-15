@@ -1,3 +1,23 @@
+## 0.3.2 — 2026-11-15
+
+**修复码道 CodeArts 真实对话稳定 400 `InferHub.001001005.400`：连续两条 user 消息被拒。**
+
+- **根因是轮次形状，不是参数**：`/api/v1` 只收严格 `user` / `assistant` 交替的对话。实测
+  （同一账号、同一模型、body ≈ 120 B，逐项只改形状）：`[user:"hi"]` 200、
+  `[user:"hi",user:"hello"]` **3/3 400**、`[user:"hi\n\nhello"]` 200、
+  `[user,assistant,user]` 200、`[developer,user,user]` 与 `[system,user,user]` 400。
+  换成中性长文（2×300 到 3×10000 字符）同样 400，单条 30000 字符反而 200 ——
+  排除长度、内容与角色名，只剩「两条 user 相邻」。
+- **签名前合并相邻同 role 消息**：`prepareChatBody` 新增 `mergeConsecutiveTurns`，把连续的
+  `user` / `system` / `developer` / `assistant`（不带 `tool_calls` / `function_call`）用
+  `\n\n` 拼成一条；多模态 `content` parts 直接拼接。`tool` 消息与带 `tool_calls` 的 assistant
+  **永不合并** —— 它们靠 `tool_call_id` 配对。合并无损：调用方说的每个字都还在。
+- **端到端复验**：归档里那条真实失败请求（117 KB、7 条消息、57 个 tools、
+  `max_completion_tokens=128000`）经 `prepareChatBody` 处理后重放 → **200**；修复前是 400，
+  智能路由在同一请求上 15 次全失败（5 个账号 × 3 轮）。
+- 回归：`tests/codearts.test.mjs` 新增五个用例 ——「连续同 role 合并」「已交替不动」
+  「tool_calls 不合并」「多模态 parts 拼接」「prepareChatBody 输出已合并」。
+
 ## 0.3.1 — 2026-11-14
 
 **修复码道 CodeArts 聊天稳定 400 `InferHub.001001005.400`（The request param is invalid）。**

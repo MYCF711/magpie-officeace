@@ -264,6 +264,35 @@ Basic 凭据回 `400 ModelArts.81002`。
 能明确指出客户端参数问题的响应仍为 400。该规则同时覆盖 HTTP 400 JSON 与 HTTP 200 SSE 内
 `error.message` 只把 code 写在括号里的形状，避免流式透传错误或非流式折叠成空回答。
 
+### 聊天轮次：连续两条 user 消息回同一个泛化 400（2026-11-15 实测）
+
+第四族 —— 与参数无关，是**轮次形状**：`/api/v1` 只收严格 `user` / `assistant` 交替的对话，
+**两条 user 消息相邻**就回同一个 `InferHub.001001005.400`（生成前校验，~0.3 s）。
+
+实测（同一账号、同一模型，body ≈ 120 B，逐项只改形状）：
+
+| 形状 | 结果 |
+|---|---|
+| `[user: "hi"]` | 200 |
+| `[user: "hi", user: "hello"]` | 400（3/3） |
+| `[user: "hi\n\nhello"]` | 200 |
+| `[user, assistant, user]` | 200 |
+| `[developer, user, user]`、`[system, user, user]` | 400 |
+| `[developer, user+user 合并]` | 200 |
+
+不是长度、不是内容、也不是角色名：`[user,user]` 换成中性长文（2×300 字符到 3×10000 字符）
+一样 400，单条 30000 字符中性文本反而 200。归档里那条真实 117 KB 请求（7 条消息、57 个 tools、
+`max_completion_tokens=128000`）把连续 user 合并成一条后，带全套 tools 与原始字段重放，**200**。
+
+⇒ 代码侧：`prepareChatBody` 在签名前调 `mergeConsecutiveTurns`（`src/codearts/index.mjs`）：
+相邻同 role 的消息用 `\n\n` 拼接（内容是多模态 parts 时拼 parts），`tool` 消息与带
+`tool_calls` / `function_call` 的 assistant **永不合并** —— 它们靠 `tool_call_id` 配对，
+拆开就成孤儿。合并是**无损**的：调用方说的每个字都还在，变的只是它被读成几个轮次。
+
+为什么容易踩：每轮重注入上下文的 agent（DSH 就是）第一轮之后就是
+`developer + user(系统提醒) + user(用户输入)` 的形状，第二条 user 必然相邻。
+0.3.1 修的是「快照折叠成空回答导致下一轮多出一条 user」，那是**症状**；0.3.2 修的是轮次本身。
+
 ### 流式响应：`choices[].text` 是累积快照（PR #35）
 
 上游当前会发 `object: "chat.completion"` 的 chunk，`choices[].text` 每次都是**截至目前的全文**，

@@ -66,6 +66,7 @@ curl -s "https://usemagpie.ai/api/latest?channel=stable" | grep -o '"version":"[
 | 16 | 已有健康账号时点添加仍换回旧账号 | 第二入口「添加其他华为云账号」不做复用探测，并且自己开一次性隔离 Chromium、返回 `opened: true`；只返回 `url` 会再次落到日常浏览器（Issue #31 / PR #37） | `index.mjs` · `src/isolated-login.mjs` |
 | 17 | 邀请开关不出现、拨了不生效或邀请挂到别的账号 | 仅 CodeArts 声明 `invite_mode`（`placement:"top"`、使用点实时读）；联网取码只在 `ask()`，off 最新 / on Make first（首选失败只回预留）；generate body 用 `channel:"WEB"`，新账号 OAuth 成功后才 `confirm-by-code` | `src/codearts/invite.mjs` · `tests/codearts-invite-wire.test.mjs` |
 | 18 | CodeArts 聊天稳定回 400 `InferHub.001001005.400`「The request param is invalid」，重新登录也没用；小请求/探针却 200 | **不是登录问题**：/api/v1 的 `max_tokens` > **32000**、`seed` ∉ {0,1}、`stop` 数组都会触发；目录自报的 65536 是 v2 值。`MAX_OUTPUT_TOKENS === 32000`，违规 seed/stop 先清洗；适配后仍是这条泛化文案时（含 200 SSE）映射 **502** 交智能路由，RANGE_VALIDATOR 等明确客户端错误保持 400；`choices[].text` 累积快照只取新增后缀并转 `delta.content`，不能折成空回答 | CHANGELOG 0.3.1 · `tests/codearts.test.mjs` |
+| 19 | 码道渠道**小请求 200、真实对话稳定 400** `InferHub.001001005.400` | **第四族：轮次形状，不是参数** —— 连续两条 `user` 消息就被拒（`[user,user]` 3/3 400；同一段文字作单条 `"a\n\nb"` 200；`user/assistant/user` 200；`developer+user+user` 400）。`prepareChatBody` 的 `mergeConsecutiveTurns` 在签名前合并相邻同 role 消息（`tool` 消息与带 `tool_calls` 的 assistant 不合并），归档里 117 KB / 57 tools 的真实请求合并后重放 200 | CHANGELOG 0.3.2 · `tests/codearts.test.mjs` |
 
 ---
 
