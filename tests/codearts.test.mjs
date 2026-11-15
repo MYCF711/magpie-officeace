@@ -267,6 +267,76 @@ test("prepareChatBody drops the parameters /api/v1 refuses outright", () => {
   assert.equal(str.body.stop, "x")
 })
 
+// ---- the gateway's turn order (measured 2026-11-15) ------------------------
+//
+// `/api/v1` takes a conversation only as a strict user/assistant alternation:
+// a second user message in a row answers the generic
+// `InferHub.001001005.400` — the same words a bad parameter gets, which is why
+// it reads as one. Measured on one account/model, bodies around 120 B:
+// `["hi","hello"]` 3/3 400, `["hi\n\nhello"]` 200, `user/assistant/user` 200,
+// `developer`+`user`+`user` 400 while the first two joined answer 200. An agent
+// that re-injects its context every turn sends exactly that shape, so the turn
+// is joined here rather than refused (nothing said is dropped).
+
+test("consecutive same-role messages are joined, not refused", () => {
+  const messages = [
+    { role: "developer", content: "be brief" },
+    { role: "user", content: "hi" },
+    { role: "user", content: "hello" },
+    { role: "user", content: "yo" },
+  ]
+  const merged = x.mergeConsecutiveTurns({ messages })
+  assert.deepEqual(merged.map((m) => m.role), ["developer", "user"])
+  assert.equal(merged[1].content, "hi\n\nhello\n\nyo")
+  // the caller's own messages are never mutated
+  assert.equal(messages[1].content, "hi")
+})
+
+test("a conversation that already alternates is left as it is", () => {
+  const messages = [
+    { role: "system", content: "be brief" },
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "hello" },
+    { role: "user", content: "yo" },
+  ]
+  assert.equal(x.mergeConsecutiveTurns({ messages }), null)
+})
+
+test("a tool call stays its own turn, and its replies are never folded", () => {
+  const messages = [
+    { role: "user", content: "read both" },
+    { role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "read", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "c1", content: "a" },
+    { role: "tool", tool_call_id: "c2", content: "b" },
+    { role: "assistant", content: "done" },
+    { role: "assistant", content: "and more" },
+  ]
+  const merged = x.mergeConsecutiveTurns({ messages })
+  assert.deepEqual(merged.map((m) => m.role), ["user", "assistant", "tool", "tool", "assistant"])
+  assert.equal(merged[4].content, "done\n\nand more")
+})
+
+test("content parts are concatenated, not stringified", () => {
+  const messages = [
+    { role: "user", content: [{ type: "text", text: "a" }] },
+    { role: "user", content: [{ type: "text", text: "b" }] },
+  ]
+  assert.deepEqual(x.mergeConsecutiveTurns({ messages }), [
+    { role: "user", content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] },
+  ])
+})
+
+test("prepareChatBody sends the joined turns", () => {
+  const out = x.prepareChatBody({
+    model: "GLM-5.2",
+    messages: [{ role: "user", content: "a" }, { role: "user", content: "b" }],
+  })
+  assert.deepEqual(out.body.messages, [{ role: "user", content: "a\n\nb" }])
+  // one user message is already legal, and it keeps its own list
+  const single = x.prepareChatBody({ model: "GLM-5.2", messages: [{ role: "user", content: "a" }] })
+  assert.deepEqual(single.body.messages, [{ role: "user", content: "a" }])
+})
+
 // The free model's TPM limit, word for word as the gateway sent it in a 200.
 const tpmEvent = 'data:{"text":"[DONE]","error_code":"InferHub.ModelArts.81111.429","error_msg":"The model TPM limit has been significantly exceeded. Please reduce the request rate and retry later."}'
 
