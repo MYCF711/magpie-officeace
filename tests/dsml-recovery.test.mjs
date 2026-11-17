@@ -2,7 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { _internal } from "../src/codearts/index.mjs"
 
-const { dsmlNameFix, fixDsmlNames, antmlToDsml, toolCallFnToDsml } = _internal
+const { dsmlNameFix, fixDsmlNames, antmlToDsml, toolCallFnToDsml, xmlCallToDsml } = _internal
 
 /** The tool set an agent like Claude Code offers, and its own spelling of it. */
 const offered = (names) => ({ tools: names.map((name) => ({ type: "function", function: { name } })) })
@@ -81,4 +81,25 @@ test("a tail two offered tools share is not guessed between", () => {
 test("an unknown tail still resolves to nothing", () => {
   const fix = dsmlNameFix(offered(["mcp__terminal__read_terminal"]))
   assert.equal(fix("write_terminal"), null)
+})
+
+test("an XML call whose outer tag names an offered tool becomes the rescued markup", () => {
+  const fix = dsmlNameFix(offered(["Edit"]))
+  const text = "<Edit><file_path>src/server.js</file_path><old_string>a</old_string><new_string>b</new_string></Edit>"
+  assert.equal(
+    xmlCallToDsml(text, fix),
+    '<｜DSML｜ invoke name="Edit"><｜DSML｜ parameter name="file_path" string="true">src/server.js</｜DSML｜ parameter><｜DSML｜ parameter name="old_string" string="true">a</｜DSML｜ parameter><｜DSML｜ parameter name="new_string" string="true">b</｜DSML｜ parameter></｜DSML｜ invoke>',
+  )
+})
+
+test("an XML block that names no offered tool is left alone", () => {
+  const fix = dsmlNameFix(offered(["Edit"]))
+  const text = "<config><host>localhost</host></config>"
+  assert.equal(xmlCallToDsml(text, fix), text)
+})
+
+test("an XML block with no child fields is left alone", () => {
+  const fix = dsmlNameFix(offered(["Edit"]))
+  const text = "<Edit>just prose</Edit>"
+  assert.equal(xmlCallToDsml(text, fix), text)
 })
