@@ -996,6 +996,19 @@ function prepareChatBody(parsed, { thinking = true } = {}) {
   if (!parsed || typeof parsed.model !== "string" || !Array.isArray(parsed.messages)) return null
   const body = { ...parsed, model: upstreamModelId(parsed.model) }
   const names = shortenToolNames(body)
+  // CodeArts' Kimi gateway does not understand OpenAI's tool_calls / tool
+  // messages: it answers 400 "tool_call_id is not found" when a tool result
+  // comes back in that shape (measured 2026-11-17, codearts/kimi-k3, second
+  // turn of an agent loop). The model itself reads and writes tools only as
+  // text — it learns their names from the system prompt and writes calls in
+  // its native markup. So for these models the exchange is flattened to text
+  // before signing: an assistant's calls become a text line, a tool result
+  // becomes a user message. The model then reads "I called Read, here is what
+  // it returned" and goes on, instead of the gateway rejecting the turn.
+  // Measured 2026-11-17: /api/v2/chat/completions on this host answers
+  // InferHub.APIG.0101.404 ("The API does not exist or has not been published"),
+  // so /api/v1 is the chat route; v2 in the catalog is a different surface.
+  if (/^kimi-/i.test(body.model)) flattenToolExchange(body)
   // Before anything is signed: the gateway refuses the turn order itself, so
   // a caller that talks in several user messages in a row never gets an answer.
   const turns = mergeConsecutiveTurns(body)
@@ -1023,6 +1036,49 @@ function prepareChatBody(parsed, { thinking = true } = {}) {
   const fold = body.stream !== true
   body.stream = true
   return { body, fold, injected, names }
+}
+
+/**
+ * Flatten a chat's tool exchange to plain text for a gateway that only
+ * understands text (CodeArts' Kimi). An assistant message's tool_calls become
+ * a line of text; a tool message becomes a user message carrying the result.
+ * The tools array itself is left in place — the gateway ignores it, and the
+ * model reads the tools from the system prompt's text.
+ */
+function flattenToolExchange(body) {
+  const msgs = body.messages
+  if (!Array.isArray(msgs)) return
+  const out = []
+  const nameOfCall = new Map() // call id → the tool's name, for the result's line
+  for (const m of msgs) {
+    if (!m || typeof m !== "object") {
+      out.push(m)
+      continue
+    }
+    // Only what the model itself said. Its calls are never echoed back: every
+    // wording that named a tool *together with its arguments* was copied on
+    // the next turn as if it were the way to call one (measured 2026-11-17,
+    // twice — `[Called Bash({…})]`, then `I ran Bash with {…}` in prose). The
+    // tool result below already carries the name, so nothing is lost.
+    if (m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+      const said = typeof m.content === "string" ? m.content.trim() : ""
+      // An assistant turn is kept even when it said nothing but the call: the
+      // gateway needs the alternation, and dropping it would put two user
+      // messages in a row (the 400 this file already works around).
+      out.push({ role: "assistant", content: said || "OK." })
+      continue
+    }
+    if (m.role === "tool") {
+      const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content)
+      const name = typeof m.name === "string" && m.name ? m.name : ""
+      // A user-side observation, never the model's own words: an assistant
+      // line naming a tool is what it imitates.
+      out.push({ role: "user", content: name ? `${name} returned:\n${text}` : `The tool returned:\n${text}` })
+      continue
+    }
+    out.push(m)
+  }
+  body.messages = out
 }
 
 /**
@@ -1357,16 +1413,44 @@ const DSML_ALIASES = {
   search_files: "grep",
 }
 
+/**
+ * LOCAL ONLY - not part of the upstream patch. Records what a request offered
+ * and which written names could not be resolved, so a leak can be diagnosed
+ * from real traffic. Writes to the OS temp dir; nothing else is kept.
+ */
+function localDsmlNote(record) {
+  if (process.env.MAGPIE_DSML_OFF) return // unit tests call the resolvers directly
+  try {
+    const file = path.join(os.tmpdir(), "magpie-dsml.log")
+    fs.appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), ...record }) + "\n", "utf8")
+  } catch {}
+}
+
 /** A resolver from a name the model wrote to the one the request offered, or null. */
 function dsmlNameFix(body) {
   const offered = []
+  // Each offered tool's own parameter keys. A call written without any invoke
+  // tag (2026-11-17: a run of <parameter name="command">… tags and nothing
+  // else) names its tool only through its arguments, so the schema is what
+  // tells the tools apart — see resolve.matchByParams below.
+  const paramsOf = new Map()
+  const keepParams = (name, schema) => {
+    const props = schema && typeof schema === "object" ? schema.properties : undefined
+    if (props && typeof props === "object") paramsOf.set(name, new Set(Object.keys(props)))
+  }
   for (const t of Array.isArray(body?.tools) ? body.tools : []) {
     const n = t?.function?.name ?? t?.name
-    if (typeof n === "string" && n) offered.push(n)
+    if (typeof n === "string" && n) {
+      offered.push(n)
+      keepParams(n, t?.function?.parameters ?? t?.function?.input_schema ?? t?.parameters ?? t?.input_schema)
+    }
   }
   for (const f of Array.isArray(body?.functions) ? body.functions : []) {
     const n = f?.name
-    if (typeof n === "string" && n) offered.push(n)
+    if (typeof n === "string" && n) {
+      offered.push(n)
+      keepParams(n, f?.parameters)
+    }
   }
   if (offered.length === 0) return null
   const byLower = new Map()
@@ -1384,7 +1468,7 @@ function dsmlNameFix(body) {
     if (!tail) continue
     byTail.set(tail, byTail.has(tail) ? null : real) // null: ambiguous
   }
-  return (written) => {
+  const resolve = (written) => {
     const lower = String(written ?? "").toLowerCase()
     if (!lower) return null
     const direct = byLower.get(lower)
@@ -1395,8 +1479,43 @@ function dsmlNameFix(body) {
       if (hit) return hit
     }
     if (byTail.has(lower)) return byTail.get(lower)
+    // A shortened name no alias covers (`exec` for `exec_command`, measured
+    // 2026-11-17 on codex/auto-deepseek-v4.1-flash) still matches when it is
+    // the prefix of exactly one offered tool. Two tools sharing the prefix
+    // (`list` here: `list_mcp_resources`, `list_mcp_resource_templates`)
+    // must not be guessed between, and a one- or two-letter drift is too
+    // loose to read as a prefix at all.
+    if (lower.length >= 3) {
+      let prefixHit = null
+      for (const [low, real] of byLower) {
+        if (low.startsWith(lower)) {
+          if (prefixHit) return null
+          prefixHit = real
+        }
+      }
+      if (prefixHit) return prefixHit
+    }
+    localDsmlNote({ kind: "unresolved", written: lower, offered: offered.slice(0, 40) })
     return null
   }
+  /**
+   * The tool whose schema declares every one of these parameter names, or
+   * null. Only a single candidate counts: when two offered tools could both
+   * take the arguments, guessing would run the wrong one. A tool that declares
+   * no properties is never a candidate — every name would "fit" it.
+   */
+  resolve.matchByParams = (written) => {
+    if (!Array.isArray(written) || written.length === 0) return null
+    let hit = null
+    for (const [name, keys] of paramsOf) {
+      if (keys.size === 0) continue
+      if (!written.every((w) => keys.has(w))) continue
+      if (hit !== null) return null
+      hit = name
+    }
+    return hit
+  }
+  return resolve
 }
 
 /**
@@ -1416,6 +1535,10 @@ const DSML_INVOKE = /(invoke\s+name\s*=\s*\\?")([^"<>\\]{1,80})(\\?"\s*>)/gi
  */
 function fixDsmlNames(text, fix, force = false, seen = null) {
   if (!fix || typeof text !== "string" || text.length === 0) return text
+  // A nameless run of parameters becomes an invoke before the DSML gate below:
+  // that text says nothing about DSML, and would otherwise be let through.
+  text = bareParamsToDsml(text, fix)
+  text = toolCallParenToDsml(text, fix)
   if (!force && !/DSML/i.test(text)) return text
   return text.replace(DSML_INVOKE, (whole, head, name, tail) => {
     const real = fix(name)
@@ -1496,13 +1619,279 @@ function toolCallFnToDsml(text, fix, seen = null) {
   })
 }
 
+/**
+ * And as its own XML: the tool's name is the outer tag and each argument is a
+ * child tag (measured 2026-11-17, codearts/deepseek-v4.1-flash, second turn of
+ * an agent loop):
+ *
+ *   <Edit><file_path>src/server.js</file_path><old_string>…</old_string></Edit>
+ *
+ * Converted only when the outer tag names a tool the request offered AND at
+ * least one child tag pairs up — a code sample an answer quotes has neither, so
+ * it is left as the text it is.
+ */
+const XML_CALL = /<([A-Za-z_][\w.-]*)(?:\s[^<>]*)?>([\s\S]*?)<\/\1>/g
+const XML_FIELD = /<([A-Za-z_][\w.-]*)>([\s\S]*?)<\/\1>/g
+
+function xmlCallToDsml(text, fix) {
+  if (!fix || typeof text !== "string" || !text.includes("</")) return text
+  return text.replace(XML_CALL, (whole, written, inner) => {
+    const name = fix(written)
+    if (!name) return whole
+    const params = []
+    XML_FIELD.lastIndex = 0
+    let m
+    while ((m = XML_FIELD.exec(inner)) !== null) params.push([m[1], m[2]])
+    if (params.length === 0) return whole
+    const body = params
+      .map(([k, v]) => `<｜DSML｜ parameter name="${k}" string="true">${v}</｜DSML｜ parameter>`)
+      .join("")
+    return `<｜DSML｜ invoke name="${name}">${body}</｜DSML｜ invoke>`
+  })
+}
+
+/**
+ * A run of parameters with no invoke tag at all — the tool's name is simply
+ * absent, so nothing in the text says which tool the arguments belong to:
+ *
+ *   <parameter name="command">Get-Date</parameter>
+ *   <parameter name="description">read the clock</parameter>
+ *
+ * (measured 2026-11-17 through codearts, on both deepseek and Kimi: a whole
+ * call arrived in this shape and the turn ended as text.)
+ *
+ * Two guards, because wrapping the wrong run runs the wrong tool:
+ *   · exactly one offered tool's schema declares every written parameter name
+ *     (see resolve.matchByParams); two candidates or none leave the text be;
+ *   · a run inside a fenced code block stays text — an answer that quotes this
+ *     markup as an example must never be executed.
+ * A run already inside an invoke is its arguments, not a nameless call, and is
+ * left alone as well.
+ */
+const BARE_PARAM = /<\s*parameter\s+name\s*=\s*\\?"([^"<>\\]{1,60})\\?"[^<>]*>([\s\S]*?)<\s*\/?\s*parameter\s*>/gi
+
+function bareParamsToDsml(text, fix) {
+  if (!fix || typeof fix.matchByParams !== "function") return text
+  if (typeof text !== "string" || !text.includes("parameter")) return text
+  const runs = []
+  BARE_PARAM.lastIndex = 0
+  let m
+  while ((m = BARE_PARAM.exec(text)) !== null) {
+    const end = m.index + m[0].length
+    const prev = runs[runs.length - 1]
+    // Consecutive tags separated by nothing but whitespace are one run.
+    if (prev && /^\s*$/.test(text.slice(prev.end, m.index))) {
+      prev.names.push(m[1])
+      prev.end = end
+    } else {
+      runs.push({ start: m.index, end, names: [m[1]] })
+    }
+  }
+  if (runs.length === 0) return text
+  let out = ""
+  let cursor = 0
+  for (const run of runs) {
+    const fences = (text.slice(0, run.start).match(/^[ \t]*(?:```|~~~)/gm) || []).length
+    if (fences % 2 === 1) continue
+    const before = text.slice(Math.max(0, run.start - 800), run.start)
+    const lastClose = Math.max(before.lastIndexOf("</｜DSML｜invoke>"), before.lastIndexOf("</invoke>"))
+    if (/invoke\s+name\s*=/i.test(before.slice(lastClose + 1))) continue
+    const name = fix.matchByParams(run.names)
+    if (!name) continue
+    out += text.slice(cursor, run.start) + `<｜DSML｜ invoke name="${name}">` + text.slice(run.start, run.end) + `</｜DSML｜ invoke>`
+    cursor = run.end
+  }
+  if (cursor === 0) return text
+  return out + text.slice(cursor)
+}
+
+/**
+ * The answer so far, cut just before a call that is still being written.
+ *
+ * CodeArts sends the whole answer again in every chunk, and snapshotToDeltaStream
+ * turns the difference between two snapshots into what the agent receives. The
+ * repair above wraps a run of parameters by inserting an invoke *before* it —
+ * text the agent may already have. The next snapshot then no longer starts with
+ * the previous one, the reader falls back to re-sending the whole answer, and
+ * the raw markup the repair was hiding has already reached the agent: measured
+ * 2026-11-17, the agent showed `<parameter …>` verbatim and the turn stopped.
+ *
+ * Holding the unfinished run back keeps snapshots append-only, so a wrapper
+ * only ever lands on text the agent has not been given yet. A call that never
+ * completes is dropped with the tail, which is what magpie's own rescue does.
+ */
+function holdUnfinishedCall(text) {
+  if (typeof text !== "string" || text.length === 0) return text
+  let cut = text.length
+  const openParam = text.lastIndexOf("<parameter")
+  if (openParam >= 0 && text.indexOf("</parameter>", openParam) < 0) cut = Math.min(cut, openParam)
+  // Kimi's own section, call or argument, still being written; and DeepSeek's
+  // <tool_call>, which the function-call repair only reads once it closes.
+  const sections = [
+    ["<|open|>tools", "<|close|>tools"],
+    ["<|open|>call", "<|close|>call"],
+    ["<|open|>argument", "<|close|>argument"],
+    ["<tool_call>", "</tool_call>"],
+  ]
+  for (const [mark, close] of sections) {
+    const at = text.lastIndexOf(mark)
+    if (at >= 0 && text.indexOf(close, at) < 0) cut = Math.min(cut, at)
+  }
+  // An invoke's or a wrapper's close still to come.
+  for (const [open, close] of [["invoke name=", "</｜DSML｜"], ["invoke name=", "</invoke>"]]) {
+    const at = text.lastIndexOf(open)
+    if (at >= 0 && text.indexOf(close, at) < 0) cut = Math.min(cut, at)
+  }
+  return cut === text.length ? text : text.slice(0, cut)
+}
+
+/**
+ * DeepSeek writes its call as a bare function call inside `<tool_call>`, with
+ * the arguments spelled `key: value` (or `key=value`) instead of JSON — no
+ * `functions.` prefix, no braces:
+ *
+ *   <tool_call>
+ *   Read(file_path: "src/server.js")
+ *   </tool_call>
+ *
+ * (measured 2026-11-17 through codearts/deepseek-v4.1-flash, third turn of an
+ * agent loop: the turn ended as this text and nothing ran.) Neither magpie's
+ * `glmCall` (arg_key pairs) nor its `paramCall` (a JSON head) reads this, and
+ * the `<tool_call>functions.x({…})</tool_call>` repair here needs braces, so
+ * it is lifted into the DSML shape by hand.
+ */
+const TOOLCALL_PAREN = /<tool_call>\s*([A-Za-z_][\w.-]{0,80})\s*\(([\s\S]*?)\)\s*<\s*\/\s*tool_call\s*>/g
+
+/** `a: 1, b: "x, y", c: [1,2]` split at top-level commas, quotes respected. */
+function splitCallArgs(text) {
+  const parts = []
+  let depth = 0
+  let quote = ""
+  let cur = ""
+  for (const ch of text) {
+    if (quote) {
+      cur += ch
+      if (ch === quote) quote = ""
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      quote = ch
+      cur += ch
+      continue
+    }
+    if (ch === "{" || ch === "[" || ch === "(") depth += 1
+    if (ch === "}" || ch === "]" || ch === ")") depth -= 1
+    if (ch === "," && depth === 0) {
+      if (cur.trim()) parts.push(cur.trim())
+      cur = ""
+      continue
+    }
+    cur += ch
+  }
+  if (cur.trim()) parts.push(cur.trim())
+  return parts
+}
+
+function toolCallParenToDsml(text, fix) {
+  if (!fix || typeof text !== "string" || !text.includes("<tool_call>")) return text
+  return text.replace(TOOLCALL_PAREN, (whole, written, raw) => {
+    const name = fix(written)
+    if (!name) return whole
+    const params = []
+    for (const part of splitCallArgs(raw)) {
+      const m = /^([A-Za-z_][\w.-]{0,60})\s*[:=]\s*([\s\S]*)$/.exec(part)
+      if (!m) return whole // a shape this does not read: leave every byte
+      const key = m[1]
+      let value = m[2].trim()
+      const quoted = /^"([\s\S]*)"$/.exec(value) || /^'([\s\S]*)'$/.exec(value) || /^`([\s\S]*)`$/.exec(value)
+      if (quoted) {
+        params.push(`<｜DSML｜ parameter name="${key}" string="true">${quoted[1]}</｜DSML｜ parameter>`)
+        continue
+      }
+      // An unquoted value is taken as written: the rescue JSON-decodes it when
+      // it can (a number, true, an array) and keeps it a string when it can't.
+      params.push(`<｜DSML｜ parameter name="${key}">${value}</｜DSML｜ parameter>`)
+    }
+    return `<｜DSML｜ invoke name="${name}">${params.join("")}</｜DSML｜ invoke>`
+  })
+}
+
+/**
+ * Kimi writes its calls in its own native markup, which magpie's text-call
+ * rescue never reads (its entry marks are `<tool_call>`, `<invoke name=`,
+ * `<function_calls>`, `<minimax:tool_call>` and the DSML pipe mark — none of
+ * them `<|open|>`). Measured 2026-11-17 on codearts/kimi-k3 through
+ * auto/kimi-k3: a whole turn of tool calls arrived as this text, 9.5 kB of it,
+ * and the agent ended the turn without running anything.
+ *
+ *   <|open|>tools<|sep|>
+ *   <|open|>call tool="Grep" index="1"<|sep|>
+ *   <|open|>argument key="pattern" type="string"<|sep|>(?i)kimi<|close|>argument<|sep|>
+ *   <|open|>argument key="path" type="string"<|sep|>C:\…<|close|>argument<|sep|>
+ *   <|open|>argument key="head_limit" type="number"<|sep|>60<|close|>argument<|sep|>
+ *   <|close|>call<|sep|>
+ *   <|close|>tools<|sep|>
+ *
+ * Rewritten into the DSML shape the rescue understands, on two guards:
+ * the tool name must resolve to one the request offered (same resolver as
+ * everywhere else), and no part of the call may sit inside a fenced code
+ * block — an answer quoting this markup as an example must stay text, since
+ * converting it would run the example. A call with an unclosed argument or an
+ * unresolvable name is left byte for byte.
+ */
+const KIMI_CALL = /<\|open\|>call\s+tool\s*=\s*\\?"([^"\\<>]+)\\?"[^<>]*<\|sep\|>([\s\S]*?)<\|close\|>call<\|sep\|>/gi
+const KIMI_ARG = /<\|open\|>argument\s+key\s*=\s*\\?"([^"\\<>]+)\\?"((?:[^<>]|<(?!open\|>))*?)<\|sep\|>([\s\S]*?)<\|close\|>argument<\|sep\|>/gi
+
+function kimiCallToDsml(text, fix) {
+  if (!fix || typeof text !== "string" || !text.includes("<|open|>")) return text
+  let out = ""
+  let last = 0
+  let fence = 0
+  // Scan the text once, tracking whether a fence (``` or ~~~) is open at each
+  // point; a call starting inside one is never converted.
+  const fenceUpTo = (from, to) => {
+    for (const m of text.slice(from, to).matchAll(/^[ \t]*(```|~~~)/gm)) fence ^= 1
+  }
+  KIMI_CALL.lastIndex = 0
+  let m
+  while ((m = KIMI_CALL.exec(text)) !== null) {
+    fenceUpTo(last, m.index)
+    const name = fix(m[1])
+    let converted = null
+    if (name && fence === 0) {
+      const params = []
+      KIMI_ARG.lastIndex = 0
+      let a
+      while ((a = KIMI_ARG.exec(m[2])) !== null) {
+        const attrs = a[2]
+        const rawVal = a[3]
+        if (/string\s*=\s*"true"/.test(attrs)) {
+          params.push(`<｜DSML｜ parameter name="${a[1]}" string="true">${rawVal}</｜DSML｜ parameter>`)
+        } else {
+          // Typed argument (array / object / number / boolean): the rescue
+          // tries JSON first and falls back to the string, so the value goes
+          // as written, without a string hint.
+          params.push(`<｜DSML｜ parameter name="${a[1]}">${rawVal}</｜DSML｜ parameter>`)
+        }
+      }
+      if (params.length > 0) converted = `<｜DSML｜ invoke name="${name}">${params.join("")}</｜DSML｜ invoke>`
+    }
+    if (converted) {
+      out += text.slice(last, m.index) + converted
+      last = m.index + m[0].length
+    }
+  }
+  if (last === 0) return text
+  return out + text.slice(last)
+}
+
 /** The same repair over a folded (non-streamed) completion. */
 function fixDsmlCompletion(completion, fix) {
   if (!fix || !completion) return completion
   const seen = new Set()
   for (const choice of Array.isArray(completion.choices) ? completion.choices : []) {
     const message = choice?.message
-    if (message && typeof message.content === "string") message.content = fixDsmlNames(toolCallFnToDsml(antmlToDsml(message.content, fix, seen), fix, seen), fix, false, seen)
+    if (message && typeof message.content === "string") message.content = fixDsmlNames(kimiCallToDsml(xmlCallToDsml(toolCallFnToDsml(antmlToDsml(message.content, fix, seen), fix, seen), fix), fix), fix, false, seen)
   }
   return completion
 }
@@ -1541,7 +1930,11 @@ function fixDsmlInStream(stream, fix) {
     let touched = false
     for (const choice of Array.isArray(ev?.choices) ? ev.choices : []) {
       if (choice && typeof choice.text === "string") {
-        const next = fixDsmlNames(toolCallFnToDsml(antmlToDsml(choice.text, fix, seen), fix, seen), fix, true, seen)
+        // Held back first: a call still being written must not be emitted, or
+        // the wrapper this repair adds would land behind text the agent
+        // already has (see holdUnfinishedCall).
+        const held = holdUnfinishedCall(choice.text)
+        const next = fixDsmlNames(kimiCallToDsml(xmlCallToDsml(toolCallFnToDsml(antmlToDsml(held, fix, seen), fix, seen), fix), fix), fix, true, seen)
         if (next !== choice.text) {
           choice.text = next
           touched = true
@@ -1549,7 +1942,7 @@ function fixDsmlInStream(stream, fix) {
       }
       const delta = choice?.delta
       if (delta && typeof delta.content === "string") {
-        const next = fixDsmlNames(toolCallFnToDsml(antmlToDsml(delta.content, fix, seen), fix, seen), fix, true, seen)
+        const next = fixDsmlNames(kimiCallToDsml(xmlCallToDsml(toolCallFnToDsml(antmlToDsml(delta.content, fix, seen), fix, seen), fix), fix), fix, true, seen)
         if (next !== delta.content) {
           delta.content = next
           touched = true
@@ -3587,9 +3980,9 @@ export const _internal = {
   claimBenefit, ensureBenefitClaimed, parseAgentModel, fetchAgentModels,
   readGrants, recordGrant, readUnconfirmed, recordUnconfirmed, grantExpiry, grantBatches, soonestLapse, fetchCreditBatches,
   PACKAGE_CREDIT_PAGE_URL, OPS_CREDIT_OVERVIEW_URL, OPS_CREDIT_CAMPAIGN_URL,
-  toBytes, isBenefitModel, prepareChatBody, mergeConsecutiveTurns, joinContent, signedFetch, signedGet,
+  toBytes, isBenefitModel, prepareChatBody, mergeConsecutiveTurns, joinContent, signedFetch, signedGet, flattenToolExchange,
   TOOL_NAME_LIMIT, cutToolName, shortenToolNames, restoreToolNames, restoreToolNamesInStream,
-  DSML_ALIASES, dsmlNameFix, fixDsmlNames, fixDsmlCompletion, fixDsmlInStream, antmlToDsml, toolCallFnToDsml,
+  DSML_ALIASES, dsmlNameFix, fixDsmlNames, fixDsmlCompletion, fixDsmlInStream, antmlToDsml, toolCallFnToDsml, xmlCallToDsml, kimiCallToDsml, bareParamsToDsml, holdUnfinishedCall, toolCallParenToDsml,
   parseSseEvents, errorCodeOf, errorMessageOf, isStaleCredential, isRateLimitCode, embeddedErrorStatus, isNotMultimodal, classifyHead,
   eventHasContent, snapshotToDeltaStream,
   peekAnswer, completionFromChunks, createConcurrencyGate, delay, retryDelayMs,
