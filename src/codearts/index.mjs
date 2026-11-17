@@ -1496,13 +1496,44 @@ function toolCallFnToDsml(text, fix, seen = null) {
   })
 }
 
+/**
+ * And as its own XML: the tool's name is the outer tag and each argument is a
+ * child tag (measured 2026-11-17, codearts/deepseek-v4.1-flash, second turn of
+ * an agent loop):
+ *
+ *   <Edit><file_path>src/server.js</file_path><old_string>…</old_string></Edit>
+ *
+ * Converted only when the outer tag names a tool the request offered AND at
+ * least one child tag pairs up — a code sample an answer quotes has neither, so
+ * it is left as the text it is.
+ */
+const XML_CALL = /<([A-Za-z_][\w.-]*)(?:\s[^<>]*)?>([\s\S]*?)<\/\1>/g
+const XML_FIELD = /<([A-Za-z_][\w.-]*)>([\s\S]*?)<\/\1>/g
+
+function xmlCallToDsml(text, fix) {
+  if (!fix || typeof text !== "string" || !text.includes("</")) return text
+  return text.replace(XML_CALL, (whole, written, inner) => {
+    const name = fix(written)
+    if (!name) return whole
+    const params = []
+    XML_FIELD.lastIndex = 0
+    let m
+    while ((m = XML_FIELD.exec(inner)) !== null) params.push([m[1], m[2]])
+    if (params.length === 0) return whole
+    const body = params
+      .map(([k, v]) => `<｜DSML｜ parameter name="${k}" string="true">${v}</｜DSML｜ parameter>`)
+      .join("")
+    return `<｜DSML｜ invoke name="${name}">${body}</｜DSML｜ invoke>`
+  })
+}
+
 /** The same repair over a folded (non-streamed) completion. */
 function fixDsmlCompletion(completion, fix) {
   if (!fix || !completion) return completion
   const seen = new Set()
   for (const choice of Array.isArray(completion.choices) ? completion.choices : []) {
     const message = choice?.message
-    if (message && typeof message.content === "string") message.content = fixDsmlNames(toolCallFnToDsml(antmlToDsml(message.content, fix, seen), fix, seen), fix, false, seen)
+    if (message && typeof message.content === "string") message.content = fixDsmlNames(xmlCallToDsml(toolCallFnToDsml(antmlToDsml(message.content, fix, seen), fix, seen), fix), fix, false, seen)
   }
   return completion
 }
@@ -1541,7 +1572,7 @@ function fixDsmlInStream(stream, fix) {
     let touched = false
     for (const choice of Array.isArray(ev?.choices) ? ev.choices : []) {
       if (choice && typeof choice.text === "string") {
-        const next = fixDsmlNames(toolCallFnToDsml(antmlToDsml(choice.text, fix, seen), fix, seen), fix, true, seen)
+        const next = fixDsmlNames(xmlCallToDsml(toolCallFnToDsml(antmlToDsml(choice.text, fix, seen), fix, seen), fix), fix, true, seen)
         if (next !== choice.text) {
           choice.text = next
           touched = true
@@ -1549,7 +1580,7 @@ function fixDsmlInStream(stream, fix) {
       }
       const delta = choice?.delta
       if (delta && typeof delta.content === "string") {
-        const next = fixDsmlNames(toolCallFnToDsml(antmlToDsml(delta.content, fix, seen), fix, seen), fix, true, seen)
+        const next = fixDsmlNames(xmlCallToDsml(toolCallFnToDsml(antmlToDsml(delta.content, fix, seen), fix, seen), fix), fix, true, seen)
         if (next !== delta.content) {
           delta.content = next
           touched = true
@@ -3589,7 +3620,7 @@ export const _internal = {
   PACKAGE_CREDIT_PAGE_URL, OPS_CREDIT_OVERVIEW_URL, OPS_CREDIT_CAMPAIGN_URL,
   toBytes, isBenefitModel, prepareChatBody, mergeConsecutiveTurns, joinContent, signedFetch, signedGet,
   TOOL_NAME_LIMIT, cutToolName, shortenToolNames, restoreToolNames, restoreToolNamesInStream,
-  DSML_ALIASES, dsmlNameFix, fixDsmlNames, fixDsmlCompletion, fixDsmlInStream, antmlToDsml, toolCallFnToDsml,
+  DSML_ALIASES, dsmlNameFix, fixDsmlNames, fixDsmlCompletion, fixDsmlInStream, antmlToDsml, toolCallFnToDsml, xmlCallToDsml,
   parseSseEvents, errorCodeOf, errorMessageOf, isStaleCredential, isRateLimitCode, embeddedErrorStatus, isNotMultimodal, classifyHead,
   eventHasContent, snapshotToDeltaStream,
   peekAnswer, completionFromChunks, createConcurrencyGate, delay, retryDelayMs,
