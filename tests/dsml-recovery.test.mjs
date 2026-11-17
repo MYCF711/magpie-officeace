@@ -66,3 +66,19 @@ test("markup that cannot be read is passed on untouched", () => {
   assert.equal(toolCallFnToDsml("<tool_call>functions.exec(oops)</tool_call>", fix), "<tool_call>functions.exec(oops)</tool_call>")
   assert.equal(toolCallFnToDsml('<tool_call>functions.teleport({"x":1})</tool_call>', fix), '<tool_call>functions.teleport({"x":1})</tool_call>')
 })
+
+test("an MCP tool written by its tail resolves to the one the request offered", () => {
+  const fix = dsmlNameFix(offered(["mcp__terminal__read_terminal", "mcp__terminal__run_in_terminal"]))
+  assert.equal(fix("read_terminal"), "mcp__terminal__read_terminal")
+  assert.equal(fix("run_in_terminal"), "mcp__terminal__run_in_terminal")
+})
+
+test("a tail two offered tools share is not guessed between", () => {
+  const fix = dsmlNameFix(offered(["mcp__a__read", "mcp__b__read"]))
+  assert.equal(fix("read"), null)
+})
+
+test("an unknown tail still resolves to nothing", () => {
+  const fix = dsmlNameFix(offered(["mcp__terminal__read_terminal"]))
+  assert.equal(fix("write_terminal"), null)
+})
