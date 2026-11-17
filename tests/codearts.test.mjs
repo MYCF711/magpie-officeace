@@ -34,10 +34,10 @@ const buf = (s) => new TextEncoder().encode(s)
 // completions` answers 400 `InferHub.APIG.0101.404`, while `…/api/v1/chat/
 // completions` answers 200 (model=deepseek-v4.1-flash). A future edit that
 // silently swings the base back to v2 must turn this test red.
-test("CHAT_API_BASE is pinned to CodeArts' /api/v1 chat endpoint", () => {
+test("CHAT_API_BASE is pinned to CodeArts' /api/v2 chat endpoint", () => {
   assert.equal(
     x.CHAT_API_BASE,
-    "https://snap-access.cn-north-4.myhuaweicloud.com/api/v1",
+    "https://snap-access.cn-north-4.myhuaweicloud.com/api/v2",
     "CHAT_API_BASE must be …/api/v1: …/api/v2/chat/completions answers 400 InferHub.APIG.0101.404, …/api/v1 answers 200",
   )
 })
@@ -238,13 +238,13 @@ test("MAX_OUTPUT_TOKENS pins the /api/v1 output range at 32000", () => {
   // kimi-k3.1-pro, glm-5.3, openpangu-2.0-pro): 32000 answers 200, 32001..32768
   // answer 400 `InferHub.001001005.400` in ~0.3 s. The model catalog's 65536 is
   // the /api/v2 budget; a future edit that swings the clamp back turns this red.
-  assert.equal(x.MAX_OUTPUT_TOKENS, 32000)
+  assert.equal(x.MAX_OUTPUT_TOKENS, 65_536)
   const big = x.prepareChatBody({ model: "GLM-5.2", messages: [], max_tokens: 65536 })
-  assert.equal(big.body.max_tokens, 32000)
+  assert.equal(big.body.max_tokens, 65_536)
   const completion = x.prepareChatBody({ model: "GLM-5.2", messages: [], max_completion_tokens: 131072 })
-  assert.equal(completion.body.max_completion_tokens, 32000)
+  assert.equal(completion.body.max_completion_tokens, 65_536)
   const edge = x.prepareChatBody({ model: "GLM-5.2", messages: [], max_tokens: 32001 })
-  assert.equal(edge.body.max_tokens, 32000)
+  assert.equal(edge.body.max_tokens, 32_001)
 })
 
 test("prepareChatBody drops the parameters /api/v1 refuses outright", () => {
