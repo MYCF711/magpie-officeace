@@ -103,3 +103,19 @@ test("an XML block with no child fields is left alone", () => {
   const text = "<Edit>just prose</Edit>"
   assert.equal(xmlCallToDsml(text, fix), text)
 })
+
+test("a shortened name matches the one offered tool it prefixes", () => {
+  const fix = dsmlNameFix(offered(["exec_command", "apply_patch"]))
+  assert.equal(fix("exec"), "exec_command")
+  assert.equal(fix("apply"), "apply_patch")
+})
+
+test("a prefix two offered tools share is not guessed between", () => {
+  const fix = dsmlNameFix(offered(["list_mcp_resources", "list_mcp_resource_templates"]))
+  assert.equal(fix("list"), null)
+})
+
+test("a one- or two-letter drift is too loose to read as a prefix", () => {
+  const fix = dsmlNameFix(offered(["exec_command"]))
+  assert.equal(fix("ex"), null)
+})
