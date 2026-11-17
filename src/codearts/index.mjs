@@ -212,6 +212,15 @@ const SEED_ALLOWED = new Set([0, 1])
 // caller shows the thinking as the answer; asked for explicitly it goes to
 // `reasoning_content` and `content` is the reply only.
 const ENABLE_THINKING = { type: "enabled" }
+// What the gateway takes to keep the reasoning out of `content` on a model that
+// cannot carry it (see the GLM note in prepareChatBody).
+const DISABLE_THINKING = { type: "disabled" }
+// Models that take `thinking` without complaint but cannot use it: the whole
+// output budget goes to reasoning, `content` comes back empty and the turn ends
+// with nothing run (measured 2026-11-17 on codearts/glm-5.3: tools + thinking →
+// empty content, stop_reason max_tokens; the same request with thinking left out
+// answers and acts). It is never sent to these, whatever the caller asks.
+const NO_THINKING_MODELS = /^glm-5.3/i
 
 // Benefits (free-quota) models require `maas_type: benefit` as a *signed*
 // header, or the backend answers InferHub.002002009.404 "model is not
@@ -992,8 +1001,21 @@ function prepareChatBody(parsed, { thinking = true } = {}) {
   const turns = mergeConsecutiveTurns(body)
   if (turns) body.messages = turns
   // `injected`: ours to take back should a model refuse the parameter.
-  const injected = thinking && body.thinking === undefined
+  //
+  // GLM-5.x never gets thinking: measured 2026-11-17 through magpie
+  // (codearts/glm-5.3, tools offered, "create a file with the Write tool"):
+  //   thinking on      → content [] and finish_reason max_tokens: the reasoning
+  //                      spent the whole output budget, so the agent got an empty
+  //                      reply and the turn ended ("answers once and stops");
+  //   left out (null)  → the gateway streams the reasoning INTO content
+  //                      (`</think>` and half-written calls in the reply);
+  //   thinking disabled → a real tool call.
+  // The gateway accepts `thinking` for GLM without complaint, so the 400
+  // fallback below never fires — `disabled` has to be said outright.
+  const glm = NO_THINKING_MODELS.test(String(body.model ?? ""))
+  const injected = thinking && body.thinking === undefined && !glm
   if (injected) body.thinking = ENABLE_THINKING
+  if (glm && body.thinking === undefined) body.thinking = DISABLE_THINKING
   for (const k of ["max_tokens", "max_completion_tokens"]) {
     if (typeof body[k] === "number" && body[k] > MAX_OUTPUT_TOKENS) body[k] = MAX_OUTPUT_TOKENS
   }
@@ -1295,6 +1317,266 @@ function restoreToolNamesInStream(stream, names) {
       return reader.cancel(reason)
     },
   })
+}
+
+// ---- DSML tool-name repair (local patch, 2026-11-17) -----------------------
+
+/**
+ * In a long conversation the model sometimes writes its call into the text as
+ * DeepSeek's own markup instead of making a real call:
+ *
+ *   <｜DSML｜invoke name="write_file">…</｜DSML｜invoke>
+ *
+ * magpie rescues such a block into a real tool call, but only when the name is
+ * one the request offered, matched exactly. The model drifts to the names it
+ * learned elsewhere — `bash`, `write_file`, `read_file` — while Claude Code
+ * offered `Bash`, `Write`, `Read`, so the rescue gives up and the markup goes to
+ * the agent as plain text: the turn ends with a wall of code and nothing runs.
+ *
+ * Fixing the name here is enough: magpie's own rescue then reads the block. Only
+ * a name that matches an offered tool (case-insensitively, or through the alias
+ * table) is touched; every other byte stays as it came.
+ */
+const DSML_ALIASES = {
+  shell: "bash",
+  run_command: "bash",
+  execute_command: "bash",
+  exec: "bash",
+  write_file: "write",
+  create_file: "write",
+  save_file: "write",
+  read_file: "read",
+  view_file: "read",
+  open_file: "read",
+  edit_file: "edit",
+  replace_in_file: "edit",
+  apply_patch: "edit",
+  list_dir: "ls",
+  list_files: "ls",
+  list_directory: "ls",
+  search_files: "grep",
+}
+
+/** A resolver from a name the model wrote to the one the request offered, or null. */
+function dsmlNameFix(body) {
+  const offered = []
+  for (const t of Array.isArray(body?.tools) ? body.tools : []) {
+    const n = t?.function?.name ?? t?.name
+    if (typeof n === "string" && n) offered.push(n)
+  }
+  for (const f of Array.isArray(body?.functions) ? body.functions : []) {
+    const n = f?.name
+    if (typeof n === "string" && n) offered.push(n)
+  }
+  if (offered.length === 0) return null
+  const byLower = new Map()
+  for (const n of offered) if (!byLower.has(n.toLowerCase())) byLower.set(n.toLowerCase(), n)
+  // An agent's MCP tools are spelled `mcp__<server>__<tool>`; the model keeps
+  // only the tail (`read_terminal`, measured 2026-11-17), which no exact match
+  // or alias table would ever resolve. The tail is used only when exactly one
+  // offered tool carries it — two servers with the same tool name must not be
+  // guessed between.
+  const tailOf = (name) => name.split("__").filter(Boolean).pop() ?? ""
+  const byTail = new Map()
+  for (const [low, real] of byLower) {
+    if (!low.includes("__")) continue
+    const tail = tailOf(low)
+    if (!tail) continue
+    byTail.set(tail, byTail.has(tail) ? null : real) // null: ambiguous
+  }
+  return (written) => {
+    const lower = String(written ?? "").toLowerCase()
+    if (!lower) return null
+    const direct = byLower.get(lower)
+    if (direct) return direct
+    const alias = DSML_ALIASES[lower]
+    if (alias) {
+      const hit = byLower.get(alias)
+      if (hit) return hit
+    }
+    if (byTail.has(lower)) return byTail.get(lower)
+    return null
+  }
+}
+
+/**
+ * `invoke name="…">`, however the tag's pipes are spelled. In an SSE stream the
+ * quotes are JSON-escaped (`name=\"bash\"`), so a backslash before each quote is
+ * part of the shape there — the same regex must read both.
+ *
+ * The tag's closing `>` is required: without it a name cut in half by a chunk
+ * boundary (`Gl` of `Glob`, `mcp` of `mcp__…`) would borrow the next quote in
+ * the chunk and be read as a name of its own.
+ */
+const DSML_INVOKE = /(invoke\s+name\s*=\s*\\?")([^"<>\\]{1,80})(\\?"\s*>)/gi
+
+/**
+ * Put the offered name back into every DSML invoke. Without `force`, a text that
+ * says nothing about DSML is returned untouched, so ordinary prose is never read.
+ */
+function fixDsmlNames(text, fix, force = false, seen = null) {
+  if (!fix || typeof text !== "string" || text.length === 0) return text
+  if (!force && !/DSML/i.test(text)) return text
+  return text.replace(DSML_INVOKE, (whole, head, name, tail) => {
+    const real = fix(name)
+    if (real && real !== name) {
+      const key = name + ">" + real
+      return head + real + tail
+    }
+    const key = "?" + name
+    return whole
+  })
+}
+
+/**
+ * GLM writes its call as `<antml:invoke>` with a JSON body instead of the
+ * attribute-and-parameter markup magpie's rescue reads:
+ *   <antml:invoke>{"tool_name":"Write","parameters":{…}}</antml:invoke>
+ * (measured 2026-11-17, codearts/glm-5.3). Rewritten into the DSML shape the
+ * rescue does understand, so the call runs instead of ending the turn as text.
+ * Anything that isn't that exact shape is left byte for byte.
+ */
+const ANTML_CALL = /<antml:invoke>\s*(\{[\s\S]*?\})\s*<\/antml:invoke>/g
+
+function antmlToDsml(text, fix, seen = null) {
+  if (typeof text !== "string" || !text.includes("antml:invoke")) return text
+  return text.replace(ANTML_CALL, (whole, raw) => {
+    let call
+    try {
+      call = JSON.parse(raw)
+    } catch {
+      return whole
+    }
+    const written = String(call?.tool_name ?? call?.name ?? "")
+    const args = call?.parameters ?? call?.arguments ?? call?.input ?? {}
+    if (!written || !args || typeof args !== "object") return whole
+    const name = fix ? fix(written) : written
+    if (!name) return whole
+    const key = name + ">" + name
+    const params = Object.entries(args)
+      .map(([k, v]) => {
+        const val = typeof v === "string" ? v : JSON.stringify(v)
+        return `<｜DSML｜ parameter name="${k}" string="true">${val}</｜DSML｜ parameter>`
+      })
+      .join("")
+    return `<｜DSML｜ invoke name="${name}">${params}</｜DSML｜ invoke>`
+  })
+}
+
+/**
+ * GLM also writes a call as a function invocation inside `<tool_call>`:
+ *   <tool_call>functions.exec({"cmd":"…"})</tool_call>
+ * (measured 2026-11-17 on codearts/glm-5.3, which had dropped the
+ * `arg_key`/`arg_value` pairs magpie's glmCall reads). The arguments are plain
+ * JSON, so the name and its arguments can be lifted into the DSML shape the
+ * rescue understands. Anything that does not parse is left byte for byte.
+ */
+const TOOLCALL_FN = /<tool_call>\s*(?:functions\.)?([A-Za-z_][\w.-]*)\s*\(\s*(\{[\s\S]*\})\s*\)\s*<\/tool_call>/g
+
+function toolCallFnToDsml(text, fix, seen = null) {
+  if (typeof text !== "string" || !text.includes("<tool_call>")) return text
+  return text.replace(TOOLCALL_FN, (whole, written, raw) => {
+    let args
+    try {
+      args = JSON.parse(raw)
+    } catch {
+      return whole
+    }
+    if (!args || typeof args !== "object") return whole
+    const name = fix ? fix(written) : written
+    if (!name) return whole
+    const key = "fn:" + name
+    const params = Object.entries(args)
+      .map(([k, v]) => {
+        const val = typeof v === "string" ? v : JSON.stringify(v)
+        return `<｜DSML｜ parameter name="${k}" string="true">${val}</｜DSML｜ parameter>`
+      })
+      .join("")
+    return `<｜DSML｜ invoke name="${name}">${params}</｜DSML｜ invoke>`
+  })
+}
+
+/** The same repair over a folded (non-streamed) completion. */
+function fixDsmlCompletion(completion, fix) {
+  if (!fix || !completion) return completion
+  const seen = new Set()
+  for (const choice of Array.isArray(completion.choices) ? completion.choices : []) {
+    const message = choice?.message
+    if (message && typeof message.content === "string") message.content = fixDsmlNames(toolCallFnToDsml(antmlToDsml(message.content, fix, seen), fix, seen), fix, false, seen)
+  }
+  return completion
+}
+
+/**
+ * The same repair over an SSE stream, done on the answer's own text.
+ *
+ * Two failed attempts are worth remembering here (both 2026-11-16):
+ *   · gating on a chunk that happens to contain "DSML" missed the whole reply
+ *     when that word itself was cut by a boundary;
+ *   · holding raw bytes across a boundary cannot work either — two chunks are
+ *     separate JSON envelopes, so the joined text has `"}}]}\n\ndata: …`
+ *     between a name and its `>`.
+ * So this parses each SSE line and repairs the text the line actually carries.
+ * Upstream sends cumulative snapshots (`choices[].text`), so the tag is whole in
+ * the snapshot that contains it; `delta.content` is repaired the same way.
+ */
+function fixDsmlInStream(stream, fix) {
+  if (!fix) return stream
+  const dec = new TextDecoder()
+  const enc = new TextEncoder()
+  let pending = ""
+  // One entry per distinct rename in this answer: a cumulative snapshot repeats
+  // the same tag in every chunk, and logging each repeat drowned the log.
+  const seen = new Set()
+  const one = (line) => {
+    if (!line.startsWith("data:")) return line
+    const payload = line.slice(5).trim()
+    if (!payload || payload === "[DONE]") return line
+    let ev
+    try {
+      ev = JSON.parse(payload)
+    } catch {
+      return line
+    }
+    let touched = false
+    for (const choice of Array.isArray(ev?.choices) ? ev.choices : []) {
+      if (choice && typeof choice.text === "string") {
+        const next = fixDsmlNames(toolCallFnToDsml(antmlToDsml(choice.text, fix, seen), fix, seen), fix, true, seen)
+        if (next !== choice.text) {
+          choice.text = next
+          touched = true
+        }
+      }
+      const delta = choice?.delta
+      if (delta && typeof delta.content === "string") {
+        const next = fixDsmlNames(toolCallFnToDsml(antmlToDsml(delta.content, fix, seen), fix, seen), fix, true, seen)
+        if (next !== delta.content) {
+          delta.content = next
+          touched = true
+        }
+      }
+    }
+    if (!touched) return line
+    // Re-serialised only when something changed: every other line stays byte for byte.
+    return "data: " + JSON.stringify(ev)
+  }
+  return stream.pipeThrough(
+    new TransformStream({
+      transform(chunk, controller) {
+        pending += dec.decode(chunk, { stream: true })
+        let at
+        while ((at = pending.indexOf("\n")) >= 0) {
+          const line = pending.slice(0, at)
+          pending = pending.slice(at + 1)
+          controller.enqueue(enc.encode(one(line) + "\n"))
+        }
+      },
+      flush(controller) {
+        pending += dec.decode()
+        if (pending) controller.enqueue(enc.encode(one(pending)))
+      },
+    }),
+  )
 }
 
 // ---- reading the gateway's answers -----------------------------------------
@@ -1644,7 +1926,7 @@ function completionFromChunks(events) {
 }
 
 /** Answer a caller that asked for JSON: read the whole stream, fold it. */
-async function foldAnswer(res, head, names = null) {
+async function foldAnswer(res, head, names = null, fix = null) {
   let text = head.text
   if (head.reader) {
     for (;;) {
@@ -1658,12 +1940,13 @@ async function foldAnswer(res, head, names = null) {
   headers.set("content-type", "application/json")
   const events = parseSseEvents(text)
   if (events.some((ev) => Array.isArray(ev.choices) && ev.choices.length > 0)) {
-    return new Response(JSON.stringify(restoreToolNames(completionFromChunks(events), names)), { status: res.status, statusText: res.statusText, headers })
+    const folded = fixDsmlCompletion(completionFromChunks(events), fix)
+    return new Response(JSON.stringify(restoreToolNames(folded, names)), { status: res.status, statusText: res.statusText, headers })
   }
   // The gateway answered JSON after all, or nothing at all.
   const whole = safeJson(text)
   if (Array.isArray(whole?.choices)) {
-    const body = names ? JSON.stringify(restoreToolNames(whole, names)) : text
+    const body = names || fix ? JSON.stringify(restoreToolNames(fixDsmlCompletion(whole, fix), names)) : text
     return new Response(body, { status: res.status, statusText: res.statusText, headers })
   }
   const code = errorCodeOf(text)
@@ -1941,6 +2224,9 @@ async function signedFetch(cred, input, init, context) {
   const parsed = body.length > 0 ? safeJson(new TextDecoder().decode(body)) : null
   const chat = prepareChatBody(parsed, context)
   if (chat) body = utf8(JSON.stringify(chat.body))
+  // The names this request offered upstream: a DSML block written with one of
+  // them (in any case, or as a common alias) is repaired so magpie rescues it.
+  const fix = chat ? dsmlNameFix(chat.body) : null
   const model = upstreamModelId(parsed?.model)
   let extra = isBenefitModel(model, context.state) ? { maas_type: "benefit" } : undefined
   const signal = init?.signal ?? req?.signal ?? undefined
@@ -2017,12 +2303,16 @@ async function signedFetch(cred, input, init, context) {
       if (res.ok) {
         const head = await peekAnswer(res)
         if (!head.code) {
-          if (chat.fold) return await foldAnswer(res, head, chat.names)
+          if (chat.fold) return await foldAnswer(res, head, chat.names, fix)
           handedOver = true
-          // The snapshot rewrite runs first and always: it is the answer's own
+          // DSML names first, on the upstream's own shape: each snapshot carries
+          // the whole text so far, so a tag is never cut in half there.
+          const raw = replayBody(head, release)
+          const fixedRaw = fix ? fixDsmlInStream(raw, fix) : raw
+          // The snapshot rewrite runs after, and always: it is the answer's own
           // shape, and a tool-name pass that skips it (no tool was cut) would
           // hand the agent the snapshot shape instead of `delta.content`.
-          const replayed = snapshotToDeltaStream(replayBody(head, release))
+          const replayed = snapshotToDeltaStream(fixedRaw)
           const stream = chat.names ? restoreToolNamesInStream(replayed, chat.names) : replayed
           return new Response(stream, { status: res.status, statusText: res.statusText, headers: streamHeaders(res.headers) })
         }
@@ -3299,6 +3589,7 @@ export const _internal = {
   PACKAGE_CREDIT_PAGE_URL, OPS_CREDIT_OVERVIEW_URL, OPS_CREDIT_CAMPAIGN_URL,
   toBytes, isBenefitModel, prepareChatBody, mergeConsecutiveTurns, joinContent, signedFetch, signedGet,
   TOOL_NAME_LIMIT, cutToolName, shortenToolNames, restoreToolNames, restoreToolNamesInStream,
+  DSML_ALIASES, dsmlNameFix, fixDsmlNames, fixDsmlCompletion, fixDsmlInStream, antmlToDsml, toolCallFnToDsml,
   parseSseEvents, errorCodeOf, errorMessageOf, isStaleCredential, isRateLimitCode, embeddedErrorStatus, isNotMultimodal, classifyHead,
   eventHasContent, snapshotToDeltaStream,
   peekAnswer, completionFromChunks, createConcurrencyGate, delay, retryDelayMs,
