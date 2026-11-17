@@ -1371,13 +1371,31 @@ function dsmlNameFix(body) {
   if (offered.length === 0) return null
   const byLower = new Map()
   for (const n of offered) if (!byLower.has(n.toLowerCase())) byLower.set(n.toLowerCase(), n)
+  // An agent's MCP tools are spelled `mcp__<server>__<tool>`; the model keeps
+  // only the tail (`read_terminal`, measured 2026-11-17), which no exact match
+  // or alias table would ever resolve. The tail is used only when exactly one
+  // offered tool carries it — two servers with the same tool name must not be
+  // guessed between.
+  const tailOf = (name) => name.split("__").filter(Boolean).pop() ?? ""
+  const byTail = new Map()
+  for (const [low, real] of byLower) {
+    if (!low.includes("__")) continue
+    const tail = tailOf(low)
+    if (!tail) continue
+    byTail.set(tail, byTail.has(tail) ? null : real) // null: ambiguous
+  }
   return (written) => {
     const lower = String(written ?? "").toLowerCase()
     if (!lower) return null
     const direct = byLower.get(lower)
     if (direct) return direct
     const alias = DSML_ALIASES[lower]
-    return alias ? byLower.get(alias) ?? null : null
+    if (alias) {
+      const hit = byLower.get(alias)
+      if (hit) return hit
+    }
+    if (byTail.has(lower)) return byTail.get(lower)
+    return null
   }
 }
 
