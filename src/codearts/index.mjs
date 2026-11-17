@@ -65,7 +65,7 @@ const NPM = "@ai-sdk/openai-compatible" // chat completions
 
 // Chat Completions base (loader `baseURL`). A chat goes to
 // `${CHAT_API_BASE}/chat/completions`.
-const CHAT_API_BASE = "https://snap-access.cn-north-4.myhuaweicloud.com/api/v1"
+const CHAT_API_BASE = "https://snap-access.cn-north-4.myhuaweicloud.com/api/v2"
 // Snap-access manager host: model list, account/quota, check-in.
 const SNAP_HOST = "https://snap-access.cn-north-4.myhuaweicloud.com"
 const SNAP_MODEL_BUILTIN_URL = `${SNAP_HOST}/v1/model/builtin`
@@ -202,7 +202,7 @@ const SSE_PEEK_LIMIT = 16 * 1024
 // answers 200, 32001..32768 answer 400 `InferHub.001001005.400` in ~0.3 s,
 // before any generation). The `/v1/model/builtin` catalog advertises 65536,
 // but that is the /api/v2 budget, not the chat route's.
-const MAX_OUTPUT_TOKENS = 32_000
+const MAX_OUTPUT_TOKENS = 65_536
 // `/api/v1` rejects these outright with the same generic 400 (measured
 // 2026-11-13): `seed` outside {0, 1}, and `stop` as an array (even `[]`;
 // only a single string is accepted). Drop/convert them before signing, or the
@@ -2275,7 +2275,11 @@ async function signedFetch(cred, input, init, context) {
   // them (in any case, or as a common alias) is repaired so magpie rescues it.
   const fix = chat ? dsmlNameFix(chat.body) : null
   const model = upstreamModelId(parsed?.model)
-  let extra = isBenefitModel(model, context.state) ? { maas_type: "benefit" } : undefined
+  // `/api/v2` answers InferHub.APIG.0101.404 to *any* request carrying this
+  // header (issue #36 — the official VS Code extension posts to v2 with an
+  // empty maas_type and gets 200), so it is only ever sent on v1.
+  const v1 = String(url).includes("/api/v1/")
+  let extra = v1 && isBenefitModel(model, context.state) ? { maas_type: "benefit" } : undefined
   const signal = init?.signal ?? req?.signal ?? undefined
 
   let active = cred
