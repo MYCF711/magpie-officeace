@@ -1395,6 +1395,22 @@ function dsmlNameFix(body) {
       if (hit) return hit
     }
     if (byTail.has(lower)) return byTail.get(lower)
+    // A shortened name no alias covers (`exec` for `exec_command`, measured
+    // 2026-11-17 on codex/auto-deepseek-v4.1-flash) still matches when it is
+    // the prefix of exactly one offered tool. Two tools sharing the prefix
+    // (`list` here: `list_mcp_resources`, `list_mcp_resource_templates`)
+    // must not be guessed between, and a one- or two-letter drift is too
+    // loose to read as a prefix at all.
+    if (lower.length >= 3) {
+      let prefixHit = null
+      for (const [low, real] of byLower) {
+        if (low.startsWith(lower)) {
+          if (prefixHit) return null
+          prefixHit = real
+        }
+      }
+      if (prefixHit) return prefixHit
+    }
     return null
   }
 }
