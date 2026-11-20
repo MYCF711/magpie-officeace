@@ -53,7 +53,6 @@ const record = (inner) => ({
   accountId: inner.accountId,
 })
 
-/** 订阅查询只读 STS，测试里用空 SKU 的响应即可。 */
 async function withSubscriptionBody(body, fn) {
   const original = globalThis.fetch
   globalThis.fetch = async () => new Response(JSON.stringify(body), { status: 200 })
@@ -63,6 +62,8 @@ async function withSubscriptionBody(body, fn) {
     globalThis.fetch = original
   }
 }
+
+/** 订阅查询只读 STS，测试里用空 SKU 的响应即可。 */
 async function withSubscriptionFetch(fn) {
   const original = globalThis.fetch
   globalThis.fetch = async () => new Response(JSON.stringify({ skus: [], bonus_skus: [] }), { status: 200 })
@@ -653,4 +654,48 @@ test("usage：签到桶把最快作废的剩余量交给最长命窗口，用完
   const bonus2 = out2.windows.find((w) => w.name.startsWith("每日签到有礼"))
   assert.equal(monthly2.runsOutAt, undefined, "50 分烧完后月窗口不再挂到期量")
   assert.equal(bonus2.aside, true, "用完的签到桶收进折叠区，不能把账号 pace 归零")
+})
+
+test("usage：失效量不超过主窗口自己剩下的量", async () => {
+  const bonusExpiry = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString()
+  const monthExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+  const body = {
+    skus: [
+      {
+        sku_code: "officeace_personal_monthly",
+        sku_name: "个人版",
+        // 只剩 5 分，比签到桶的 50 分少 —— 不可能「失效」50
+        quotas: [{ sku_attr_code: "officeace_points", sku_value: 300, current_value: 295, expired_time: monthExpiry }],
+      },
+    ],
+    bonus_skus: [{ activity_name: "每日签到有礼", points: 50, current_value: 0, expired_time: bonusExpiry }],
+  }
+
+  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile(), fetch: noModelInfo })
+  const out = await withSubscriptionBody(body, () => plugin.auth.usage(async () => record(withMaas), {}))
+  const monthly = out.windows.find((w) => w.name.startsWith("个人版"))
+  assert.equal(monthly.runsOutAt, bonusExpiry)
+  assert.equal(monthly.runsOut, 5, "夹到主窗口自己的剩余（与 codearts 的 min(lapse.credit, left) 同构）")
+})
+
+test("usage：`.trial` 桶（无到期）也是活桶，用完的活动桶照样收进折叠区", async () => {
+  const bonusExpiry = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString()
+  const body = {
+    skus: [
+      {
+        sku_code: "officeace.personal.package.trial",
+        sku_name: "个人体验版",
+        quotas: [{ sku_attr_code: "officeace_points", sku_value: 500, current_value: 0 }],
+      },
+    ],
+    bonus_skus: [{ activity_name: "每日签到有礼", points: 50, current_value: 50, expired_time: bonusExpiry }],
+  }
+
+  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile(), fetch: noModelInfo })
+  const out = await withSubscriptionBody(body, () => plugin.auth.usage(async () => record(withMaas), {}))
+  const trial = out.windows.find((w) => w.name.startsWith("个人体验版"))
+  const bonus = out.windows.find((w) => w.name.startsWith("每日签到有礼"))
+  assert.equal(trial.aside, undefined, "活着的体验版桶不进折叠区")
+  assert.equal(trial.runsOutAt, undefined, "不过期的桶没有到期时刻可挂，不冒充")
+  assert.equal(bonus.aside, true, "体验版还有额度时，烧完的签到桶不能把账号归零")
 })
