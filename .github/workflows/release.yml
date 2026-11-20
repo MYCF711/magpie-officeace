@@ -8,6 +8,11 @@ name: release
 #
 # ⚠ 这个 workflow 不参与 magpie 的更新检测（那是 push 默认分支 + npm publish 的事）。
 #   Release 是给人看的。
+#
+# ⚠ **不发布到 npm。** `npm run publish:npm` 由本地手动执行（CHECKLIST B 表第 5 步）。
+#   2026-11-20 之前这里会自动 publish，和本地发布撞车：本地刚推完，npm 还没登记这个版本，
+#   守卫里的 `npm view` 查不到 ⇒ 它以为是自己首发 ⇒ 409 "Cannot publish over previously
+#   staged version"，然后每次发版都多一封失败邮件。
 
 on:
   push:
@@ -114,20 +119,3 @@ jobs:
               --title "$GITHUB_REF_NAME" \
               --notes-file notes.md
           fi
-
-      - name: Publish to npm（有 NPM_TOKEN 才发）
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "没有 NPM_TOKEN，跳过 npm 发布（Release 已建）"
-            exit 0
-          fi
-          ver="$(node -p "require('./package.json').version")"
-          if npm view "officeace-auth@${ver}" version >/dev/null 2>&1; then
-            echo "officeace-auth@${ver} 版本已存在（already published），跳过重复发布"
-            exit 0
-          fi
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > "$HOME/.npmrc"
-          npm run publish:npm
