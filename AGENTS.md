@@ -82,9 +82,11 @@ npm pack --dry-run
 # 发布（包内 name 与 npm 包名不同时）
 npm run publish:npm
 
-# Release：本仓库有 release.yml，推 tag 后 workflow 自动建（不用手工 POST）
-git tag v0.1.10 && git push origin v0.1.10
-#   （workflow 会自动建 Release；约 1 分钟后查 /releases/tags/v<version>）
+# Release：先打 tag 推上去，再手动跑 workflow 建 Release
+git tag v0.3.4 && git push origin v0.3.4
+gh workflow run release.yml -f tag=v0.3.4
+#   （推 tag 不会自动建 —— 自动跑会和本地 npm 发布撞车出 409；
+#     建完约 1 分钟查 /releases/tags/v<version>）
 ```
 
 真实登录态与缓存在 `~/.cache/magpie/officeace*`；探针脚本需要现场凭据时从那里取。
