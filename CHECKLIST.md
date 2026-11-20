@@ -98,7 +98,9 @@
       判据：返回 + officeace-auth@<版本>，且 package.json 的 name 已还原
 □ 第 6 步 · tag + Release
       命令：git tag v<version> && git push origin v<version>
-      本仓库**有** .github/workflows/release.yml ⇒ 推 tag 后 workflow 自动建，不用手工 POST
+      ⚠ 推 tag **不会**自动建 Release（2026-11-20 起 release.yml 只认手动触发 ——
+        自动跑会和第 5 步的本地 npm 发布撞车，每次发版多一封 409 失败邮件）。
+      建 Release：gh workflow run release.yml -f tag=v<version>（或 Actions 页面手动跑）
       判据：约 1 分钟后 GET /releases/tags/v<version> 为 200
         { tag_name, target_commitish:"main", name, body:<CHANGELOG 该版本段>, draft:false }
       判据：tag 与 version 一致；Release 不是 draft
