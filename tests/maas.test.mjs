@@ -699,3 +699,45 @@ test("usage：`.trial` 桶（无到期）也是活桶，用完的活动桶照样
   assert.equal(trial.runsOutAt, undefined, "不过期的桶没有到期时刻可挂，不冒充")
   assert.equal(bonus.aside, true, "体验版还有额度时，烧完的签到桶不能把账号归零")
 })
+
+test("usage：多个活动桶各自带自己的失效时刻，主窗口只承载最早那批", async () => {
+  const soonExpiry = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+  const laterExpiry = new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString()
+  const monthExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+  const body = {
+    skus: [
+      {
+        sku_code: "officeace_personal_monthly",
+        sku_name: "个人版",
+        quotas: [{ sku_attr_code: "officeace_points", sku_value: 4000, current_value: 1136, expired_time: monthExpiry }],
+      },
+    ],
+    bonus_skus: [
+      { activity_name: "每日签到有礼", points: 50, current_value: 0, expired_time: soonExpiry },
+      { activity_name: "周末加码", points: 300, current_value: 0, expired_time: laterExpiry },
+    ],
+  }
+
+  const plugin = await OfficeAceAuthPlugin({}, { authFile: tempAuthFile(), fetch: noModelInfo })
+  const out = await withSubscriptionBody(body, () => plugin.auth.usage(async () => record(withMaas), {}))
+  const monthly = out.windows.find((w) => w.name.startsWith("个人版"))
+  const soon = out.windows.find((w) => w.name.startsWith("每日签到有礼"))
+  const later = out.windows.find((w) => w.name.startsWith("周末加码"))
+
+  assert.equal(monthly.runsOutAt, soonExpiry, "主窗口承载最早那批")
+  assert.equal(monthly.runsOut, 50)
+  assert.equal(soon.runsOutAt, soonExpiry, "签到桶自己带自己的失效时刻")
+  assert.equal(soon.runsOut, 50)
+  assert.equal(later.runsOutAt, laterExpiry, "第二批不能被主窗口只承载一个而丢掉")
+  assert.equal(later.runsOut, 300)
+
+  // 最早的烧完后，主窗口改承载下一批 —— 不是把失效信息一起丢掉
+  body.bonus_skus[0].current_value = 50
+  const out2 = await withSubscriptionBody(body, () => plugin.auth.usage(async () => record(withMaas), {}))
+  const monthly2 = out2.windows.find((w) => w.name.startsWith("个人版"))
+  const later2 = out2.windows.find((w) => w.name.startsWith("周末加码"))
+  assert.equal(monthly2.runsOutAt, laterExpiry)
+  assert.equal(monthly2.runsOut, 300, "失效量跟着换成下一批的剩余")
+  assert.equal(later2.runsOutAt, laterExpiry)
+  assert.equal(later2.runsOut, 300)
+})

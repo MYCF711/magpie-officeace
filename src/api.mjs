@@ -205,6 +205,7 @@ export async function fetchUsage(cred) {
   }
 
   // ② 活动桶
+  const bonusWindows = []
   for (const bonus of Array.isArray(j?.bonus_skus) ? j.bonus_skus : []) {
     const points = Number(bonus?.points)
     if (!Number.isFinite(points) || points <= 0) continue
@@ -214,7 +215,7 @@ export async function fetchUsage(cred) {
     const round = (n) => Math.round(n * 100) / 100
     const expiresAt = typeof bonus.expired_time === "string" ? bonus.expired_time : null
 
-    windows.push({
+    const w = {
       name: `${bonus.activity_name ?? "活动奖励"} · 剩 ${round(remaining)}`,
       used: Math.min(100, Math.round(((points - remaining) / points) * 100)),
       ...(expiresAt !== null ? { resetsAt: new Date(expiresAt).toISOString() } : {}),
@@ -224,7 +225,9 @@ export async function fetchUsage(cred) {
       unit: "积分",
       span: 0,
       ...(expiresAt !== null && new Date(expiresAt).getTime() <= nowMs ? { aside: true } : {}),
-    })
+    }
+    windows.push(w)
+    bonusWindows.push(w)
   }
 
   // ③ 让最长命的窗口带上「最快作废的那一桶」
@@ -264,6 +267,20 @@ export async function fetchUsage(cred) {
       // 失效量是「最快作废那桶的剩余」，但不可能超过这个窗口自己还剩的量
       // （与 codearts 的 `Math.min(lapse.credit, left)` 同构）
       main.w.runsOut = Math.min(left(soon.w), left(main.w))
+    }
+
+    // 每个活动桶都带**自己那一批**的失效时刻与剩余，不只最早那批：签到桶和
+    // 周末加码桶各有各的到期，主窗口一次只能承载一个。magpie 的 usedWindow
+    // 落在套餐桶上时看不到别的活动桶 —— 各自带上自己的 runsOutAt/runsOut，
+    // 第二批也不会被主窗口的 pace 压住。主窗口已经写过的不覆盖（它挂的是更早的那批）。
+    for (const w of bonusWindows) {
+      if (w.aside || w.runsOutAt !== undefined) continue
+      const at = Date.parse(w.resetsAt ?? "")
+      if (!Number.isFinite(at) || at <= nowMs) continue
+      const own = left(w)
+      if (own <= 0) continue
+      w.runsOutAt = new Date(at).toISOString()
+      w.runsOut = own
     }
   }
 
