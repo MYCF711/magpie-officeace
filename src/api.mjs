@@ -227,6 +227,35 @@ export async function fetchUsage(cred) {
     })
   }
 
+  // ③ 让最长命的窗口带上「最快作废的那一桶」
+  //
+  // magpie 的 Use before expiry 按每个窗口的 pace 取最紧的一个。OfficeAce
+  // 把套餐桶和签到桶都做成独立窗口：50 分今天作废、300 分 30 天后才作废，
+  // 30 天窗口的 0.139 会把 50 分窗口的 25 压掉。把最快作废的剩余量挂到
+  // 最长命窗口的 runsOutAt/runsOut 上，magpie 会把它折进这个窗口的 pace，
+  // 50 分就能先被烧掉；窗口本身的 resetsAt 不变，卡片仍显示各自的到期。
+  const live = windows
+    .map((w) => ({ w, at: Date.parse(w.resetsAt ?? "") }))
+    .filter(({ w, at }) => Number.isFinite(at) && at > nowMs && !w.aside && (w.limit ?? 0) - (w.amount ?? 0) > 0)
+
+  if (live.length > 0) {
+    // 已经用完的桶不该把账号的 pace 归零：有活着的桶时收进折叠区
+    for (const w of windows) {
+      if (!w.aside && (w.limit ?? 0) > 0 && (w.limit ?? 0) - (w.amount ?? 0) <= 0) w.aside = true
+    }
+
+    let main = live[0]
+    let soon = live[0]
+    for (const one of live) {
+      if (one.at > main.at) main = one
+      if (one.at < soon.at) soon = one
+    }
+    if (soon.at < main.at) {
+      main.w.runsOutAt = new Date(soon.at).toISOString()
+      main.w.runsOut = (soon.w.limit ?? 0) - (soon.w.amount ?? 0)
+    }
+  }
+
   return { plan: planName, windows }
 }
 
