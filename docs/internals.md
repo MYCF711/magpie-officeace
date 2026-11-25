@@ -301,6 +301,40 @@ Basic 凭据回 `400 ModelArts.81002`。
 流式转发则由 `snapshotToDeltaStream` 改成标准 `delta.content` 增量。已有 `delta` 的旧形状逐字节透传。
 这里只接入 PR #35 的快照部分，**不采用**其旧版 `normalizeMessages` / tool 结果改 user 的改动。
 
+### 流式响应：工具参数整段缓冲撞上 60 s 空闲超时（2026-11-25 实测）
+
+症状：agent（实测是 DSH）每到「写一个大文件」那一步就报
+`CodeArts: connection lost mid-reply (ECONNRESET: The socket connection was closed unexpectedly ...)`，
+上游状态 200、`out=0`、没有 `finish_reason`。纯文本长回答完全正常，重试和换账号都不起作用。
+
+机制：`glm-5.3-flash` 的 `reasoning_content` / `content` 是逐块流出的，但 `delta.tool_calls`
+要**整段工具参数生成完**才一次性发出一个 chunk。生成期间连接上一个字节都没有，
+华为 APIG 的 backend 空闲超时是 **60 s**，超时就直接断开连接（同一网关偶尔会改回
+504 `APIG.0203 Backend timeout`）。插件的 `replayBody` 读流时抛出 `ECONNRESET`，
+magpie 包装成 `connection lost mid-reply`。下游已经收到过字节，宿主不能透明重试；
+agent 自己的重试请求体完全相同，又要写同一个大参数，所以每次都在 60 s 处再断一次。
+
+实测（走插件自己的 `loader.fetch`，单个 `write_file` 工具，要求「一次写完 N 行」）：
+
+| 请求 | 结果 |
+|---|---|
+| glm-5.3-flash，纯文本约 4000 字 | 200，155 s 内持续出块，正常 `[DONE]` |
+| glm-5.3-flash，工具调用 300 行（约 5.5 KB） | 200，但中途**静默约 31 s**，参数整段一次到达 |
+| glm-5.3-flash，工具调用 600 行 | **68.9 s 处断开**，最后 60 s 没有任何数据 |
+| deepseek-v4.1-flash-1017，工具调用 600 行 | 200，683 个 chunk 逐块流出参数，15.9 s 正常结束 |
+
+线上统计（11-24 至 11-25，单机）：26 次失败全部是 `glm-5.3-flash` + 工具调用，
+每次「最后一块数据 → 报错」的间隔都在 **59.7–60.2 s**。
+
+排除过的方向：总时长上限（纯文本 155 s 正常）、`max_tokens`、请求体大小、登录态；
+`/api/v1`（上游 200 内嵌错误，插件映射 502）、非流式（同样受 60 s 空闲超时）都绕不过去；
+`max_tokens` 调小只会把断连换成工具调用被截断。在 system 里提示模型拆分写入，600 行时模型
+仍然坚持一次写完。
+
+⇒ 插件当前**不处理**这个问题（根因在上游，处理方式需要维护者决定）。用户侧的规避办法：带工具的
+agent 改用 `deepseek-v4.1-flash-1017`；或者让 agent 的工具设计限制单次参数大小（实测 5.5 KB 安全）。
+未验证：glm-5.2 / glm-5.3 / kimi / openpangu 是否同样整段缓冲。
+
 ---
 
 ## 额度分桶
