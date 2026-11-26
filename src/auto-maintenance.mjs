@@ -17,7 +17,25 @@
 //     新代码下次启动才加载 —— 这是这个兜底能做到的极限。
 //   · 找不到 magpie 可执行文件时只记 `no-magpie-exe`，不伪造徽章、不硬编码路径；
 //     可用 `MAGPIE_EXE` 明示。
-//   · 一切失败都静默：不抛、不拖慢登录/额度/聊天。
+//   · 失败不抛、不拖慢登录/额度/聊天 —— 但**不再无声**：原因写进节流状态文件
+//     （issue #55 之前 `writeAutoState` 的异常被 `catch {}` 吞掉，写失败等于节流失效，
+//      重试间隔退化成「每次插件重载」，被当成下载风暴的放大器）。
+//
+// ═══════════════════════════════════════════════════════════════════
+// 锁的语义（issue #55）
+// ═══════════════════════════════════════════════════════════════════
+//
+// 锁文件写两样东西：`pid`（插件进程）与 `child`（`magpie plugin update` 子进程）。
+// **判定只看子进程还在不在**，不看时间戳「自愈」：
+//
+//   · 子进程活着 ⇒ 真的有人在更新，`locked`；
+//   · 子进程死了（或锁里根本没有 PID）⇒ 孤儿锁，立刻接管，并在新锁里记下接管了谁；
+//   · 只有时间戳兜底：超过 `LOCK_MS` 的一律作废。
+//
+// 为什么不能只靠 `child.on("exit")` 释放：插件进程（宿主）重启时那个回调永远不执行，
+// 锁会带着 5 天前的时间戳留下来，任何人读到都会以为更新还在跑 —— 这正是 #55 的现场。
+// 为什么不能只靠时间戳「自愈」：10 分钟后锁虽然被当成空闲，但**并发的那次 spawn 还在跑**，
+// 于是同一台机器上会同时存在多个 `plugin update`，各自全量下载一轮。
 
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, unlinkSync } from "node:fs"
 import { homedir } from "node:os"
@@ -80,25 +98,66 @@ export function readAutoState(site, { cacheDir = CACHE_DIR() } = {}) {
 function writeAutoState(site, state, { cacheDir = CACHE_DIR() } = {}) {
   try {
     writeJsonAtomic(join(cacheDir, `${STATE_PREFIX}-${site}.json`), state)
-  } catch {}
+    return true
+  } catch {
+    // 写失败 ⇒ 6 小时节流失效 ⇒ 每次插件重载都重试。返回值让调用方能说清这件事，
+    // 而不是像 #55 之前那样把它一起吞掉。
+    return false
+  }
 }
 
 function updateLockPath(cacheDir) {
   return join(cacheDir, `${STATE_PREFIX}-update.lock`)
 }
 
-function lockHeld(cacheDir, now) {
+/** 进程还活着吗？`EPERM` = 存在但没权限发信号，仍然算活着。 */
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
   try {
-    const v = JSON.parse(readFileSync(updateLockPath(cacheDir), "utf8"))
-    return now - Number(v?.at || 0) < LOCK_MS
-  } catch {
-    return false
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return e?.code === "EPERM"
   }
 }
 
-function takeLock(cacheDir, now) {
+/**
+ * 锁被谁占着。顺序：
+ *   1. 锁里的 `child`（`magpie plugin update` 子进程）活着 ⇒ 占着；
+ *   2. 只有老格式的 `pid`（插件进程）⇒ 按它的存活判断；
+ *   3. 两者都没有（或读不出来）⇒ 只能按时间戳算，超时即作废。
+ */
+function lockHeld(cacheDir, now) {
+  let v
   try {
-    writeJsonAtomic(updateLockPath(cacheDir), { pid: process.pid, at: now })
+    v = JSON.parse(readFileSync(updateLockPath(cacheDir), "utf8"))
+  } catch {
+    return false
+  }
+  if (!(now - Number(v?.at || 0) < LOCK_MS)) return false
+  if (Number.isInteger(v?.child) && v.child > 0) return pidAlive(v.child)
+  if (Number.isInteger(v?.pid) && v.pid > 0) return pidAlive(v.pid)
+  return true
+}
+
+/**
+ * 拿锁。`child` 是 `magpie plugin update` 的 PID —— 有它才判得准「还有人在更新」。
+ * 上一把锁的持有者已经死了的时候，把死者的 PID 一并记进 `tookOver`，排障时能看出来。
+ */
+function takeLock(cacheDir, now, child = null) {
+  try {
+    const prev = readJson(updateLockPath(cacheDir), null)
+    const rec = { pid: process.pid, at: now }
+    if (Number.isInteger(child) && child > 0) rec.child = child
+    const deadPid = Number.isInteger(prev?.pid) && !pidAlive(prev.pid) ? prev.pid : null
+    const deadChild = Number.isInteger(prev?.child) && !pidAlive(prev.child) ? prev.child : null
+    if (deadPid !== null || deadChild !== null) {
+      rec.tookOver = { pid: deadPid, child: deadChild, at: Number(prev?.at || 0) || null }
+    } else if (prev?.tookOver) {
+      // 同一次 kick 里 spawn 之后会再写一遍（补子进程 PID）——别把接管记录冲掉
+      rec.tookOver = prev.tookOver
+    }
+    writeJsonAtomic(updateLockPath(cacheDir), rec)
   } catch {}
 }
 
@@ -214,7 +273,32 @@ export async function kick(c, opts = {}) {
       writeAutoState(c.id, { ...state, lastAttempt: now, latest: waiting.latest, reason: String(e?.message ?? e) }, { cacheDir })
       return { skipped: "spawn-failed", error: String(e?.message ?? e) }
     }
+
+    const childPid = Number.isInteger(child?.pid) && child.pid > 0 ? child.pid : null
+    // 锁里补上子进程 PID：之后不管插件进程死没死，「还有人在更新吗」都按它判断。
+    takeLock(cacheDir, now, childPid)
+    // **spawn 之后立刻**记 lastAttempt，而不是等 exit。子进程挂住时 exit 永不触发，
+    // 旧写法下 lastAttempt 一直是空的 ⇒ 每次插件重载都再 spawn 一个 ⇒ #55 的并发风暴。
+    const stateSaved = writeAutoState(
+      c.id,
+      { ...state, lastAttempt: now, latest: waiting.latest, reason: "started", childPid },
+      { cacheDir },
+    )
+
+    // 看门狗：父进程还活着时兜住「子进程挂死」。父进程先死的情况由锁的 PID 校验处理
+    // （子进程死掉后孤儿锁会被下一次 kick 直接接管）。
+    let watchdog = null
+    if (childPid !== null && typeof setTimeout === "function") {
+      watchdog = setTimeout(() => {
+        try { child.kill?.("SIGKILL") } catch {}
+        releaseLock(cacheDir)
+        writeAutoState(c.id, { ...state, lastAttempt: now, latest: waiting.latest, reason: "timeout" }, { cacheDir })
+      }, LOCK_MS)
+      watchdog.unref?.()
+    }
+
     child.on?.("exit", (code) => {
+      if (watchdog) clearTimeout(watchdog)
       releaseLock(cacheDir)
       if (code === 0) {
         noteUpdated(waiting.package, waiting.version, waiting.latest, { dir })
@@ -229,7 +313,7 @@ export async function kick(c, opts = {}) {
       }
     })
     child.unref?.()
-    return { started: true, waiting }
+    return { started: true, waiting, childPid, stateSaved }
   } catch (e) {
     return { skipped: "error", error: String(e?.message ?? e) }
   }
@@ -248,4 +332,15 @@ export function initAutoMaintenance(c) {
     }, 20_000)
     t.unref?.()
   } catch {}
+}
+
+export const _internal = {
+  LOCK_MS,
+  THROTTLE_MS,
+  STATE_PREFIX,
+  pidAlive,
+  lockHeld,
+  takeLock,
+  releaseLock,
+  updateLockPath,
 }
