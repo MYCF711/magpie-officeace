@@ -101,19 +101,24 @@ jobs:
       - name: 建 Release（已存在则刷新正文）
         env:
           GH_TOKEN: ${{ github.token }}
+          # ⚠ 手动触发时 `GITHUB_REF_NAME` 是**分支名**（main），不是 tag ——
+          #   2026-11-26 就这么建出过一个 tag=main 的 Release。这里和上面两步一样，
+          #   优先用 inputs.tag，没有才退回 ref_name（push tag 触发时才走那条路）。
+          REF_NAME: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
+          test -n "${REF_NAME:-}"
           # 重推同一个 tag 时刷新，而不是报错 —— CHANGELOG 改了，Release 就跟着改
           # ⚠ --draft=false 是必需的：tag 被删过的话，GitHub 会把 Release 转成草稿，
           #   而 `gh release view` 看得见草稿 —— 于是走 edit 分支，草稿就一直是草稿。
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release edit "$GITHUB_REF_NAME" \
-              --title "$GITHUB_REF_NAME" \
+          if gh release view "$REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$REF_NAME" \
+              --title "$REF_NAME" \
               --notes-file notes.md \
               --draft=false
           else
-            gh release create "$GITHUB_REF_NAME" \
-              --title "$GITHUB_REF_NAME" \
+            gh release create "$REF_NAME" \
+              --title "$REF_NAME" \
               --notes-file notes.md
           fi
 
